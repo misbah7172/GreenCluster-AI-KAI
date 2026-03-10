@@ -1,0 +1,28 @@
+# KAI - Kubernetes AI Inference Energy Benchmarking Platform
+# Dependencies
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# GPU Monitoring (NVIDIA NVML)
+pynvml>=11.5.0
+
+# CPU Monitoring
+psutil>=5.9.0
+
+# gRPC (inter-chunk communication)
+grpcio>=1.60.0
+grpcio-tools>=1.60.0
+protobuf>=4.25.0
+
+# Kubernetes client
+kubernetes>=28.1.0
+
+# Dashboard
+streamlit>=1.30.0
+
+# Analysis & Plotting
+matplotlib>=3.8.0
+pandas>=2.1.0
+numpy>=1.26.0

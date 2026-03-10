@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package kai;
+
+// Service exposed by each model chunk container.
+// The gateway (or the previous chunk in the pipeline) calls Infer()
+// to pass an intermediate tensor through the chunk and get the result back.
+service InferenceService {
+  // Run a forward pass on the chunk and return the output tensor.
+  rpc Infer (InferRequest) returns (InferResponse);
+
+  // Lightweight health / readiness probe.
+  rpc HealthCheck (HealthRequest) returns (HealthResponse);
+}
+
+message InferRequest {
+  // Serialized tensor bytes (torch.save / io.BytesIO).
+  bytes tensor_data = 1;
+
+  // Zero-based chunk ID that should process this request.
+  int32 chunk_id = 2;
+
+  // Unique identifier for the inference request (for tracing).
+  string request_id = 3;
+
+  // Shape of the tensor as a list of ints (for validation).
+  repeated int32 tensor_shape = 4;
+
+  // Data type of the tensor (e.g. "float32").
+  string tensor_dtype = 5;
+}
+
+message InferResponse {
+  // Serialized output tensor bytes.
+  bytes tensor_data = 1;
+
+  // Chunk ID that processed the request.
+  int32 chunk_id = 2;
+
+  // Request ID echoed back for correlation.
+  string request_id = 3;
+
+  // Shape of the output tensor.
+  repeated int32 tensor_shape = 4;
+
+  // Data type of the output tensor.
+  string tensor_dtype = 5;
+
+  // Time taken by this chunk for inference, in milliseconds.
+  float inference_time_ms = 6;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  // True if the chunk is loaded and ready.
+  bool ready = 1;
+
+  // Chunk ID.
+  int32 chunk_id = 2;
+
+  // Human-readable status message.
+  string status = 3;
+}
