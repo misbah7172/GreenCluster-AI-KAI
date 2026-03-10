@@ -1,0 +1,29 @@
+# -----------------------------------------------------------
+# monitor-service.yaml
+# ClusterIP Service for the monitoring DaemonSet.
+#
+# Exposes all monitor pods internally so the k8s_runner
+# and controller can scrape metrics from every GPU node.
+#
+# Because the monitor runs as a DaemonSet, this service
+# load-balances across all monitor pods. To query a specific
+# node's monitor, the controller addresses pods directly
+# via their pod IP.
+# -----------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: kai-monitor
+  labels:
+    app: kai
+    component: monitor
+spec:
+  type: ClusterIP
+  selector:
+    app: kai
+    component: monitor
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+      protocol: TCP

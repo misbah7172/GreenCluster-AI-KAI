@@ -1,0 +1,63 @@
+# -------------------------------------------------
+# Dockerfile.chunk
+# Container for a single model-chunk gRPC server.
+# -------------------------------------------------
+# Build context: repository root (c:\CODE\KAI or /app)
+# Usage:
+#   docker build -f docker/Dockerfile.chunk -t kai-chunk .
+#   docker run --gpus '"device=0"' \
+#     -e CHUNK_ID=0 -e NUM_CHUNKS=3 -e MODEL_TYPE=transformer \
+#     -e WEIGHTS_DIR=/data/chunks -e PORT=50051 \
+#     -v $(pwd)/data/chunks:/data/chunks \
+#     -p 50051:50051 kai-chunk
+# -------------------------------------------------
+
+FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
+
+# Avoid interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.11 and pip
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3.11 python3.11-venv python3-pip && \
+    rm -rf /var/lib/apt/lists/*
+
+# Ensure python3/pip point to 3.11
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# Working directory
+WORKDIR /app
+
+# Install Python dependencies (only what the chunk server needs)
+COPY requirements.txt .
+RUN pip install --no-cache-dir \
+    torch>=2.0.0 \
+    grpcio>=1.60.0 \
+    protobuf>=4.25.0 \
+    pynvml>=11.5.0
+
+# Copy application code
+COPY model/ model/
+COPY proto/ proto/
+COPY monitoring/ monitoring/
+
+# Default environment variables
+ENV CHUNK_ID=0
+ENV NUM_CHUNKS=3
+ENV MODEL_TYPE=transformer
+ENV WEIGHTS_DIR=/data/chunks
+ENV PORT=50051
+
+# gRPC port
+EXPOSE ${PORT}
+
+# Health check: attempt a gRPC health request
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python3 -c "import grpc; from proto import inference_pb2, inference_pb2_grpc; \
+ch = grpc.insecure_channel('localhost:${PORT}'); \
+stub = inference_pb2_grpc.InferenceServiceStub(ch); \
+r = stub.HealthCheck(inference_pb2.HealthRequest()); \
+assert r.ready" || exit 1
+
+ENTRYPOINT ["python3", "-m", "model.chunk_server"]

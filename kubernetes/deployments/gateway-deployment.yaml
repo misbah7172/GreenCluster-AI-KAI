@@ -1,0 +1,67 @@
+# -----------------------------------------------------------
+# gateway-deployment.yaml
+# Deployment for the inference gateway HTTP service.
+#
+# The gateway receives HTTP inference requests and chains
+# gRPC calls through all chunk services in sequence.
+# No GPU required -- the gateway only forwards tensors.
+#
+# The CHUNK_HOSTS env var is built from the chunk service
+# DNS names created by chunk-service.yaml.
+# -----------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kai-gateway
+  labels:
+    app: kai
+    component: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kai
+      component: gateway
+  template:
+    metadata:
+      labels:
+        app: kai
+        component: gateway
+    spec:
+      containers:
+        - name: gateway
+          image: kai-gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: GATEWAY_PORT
+              value: "8080"
+            # Comma-separated list of chunk service endpoints.
+            # Each chunk-N resolves via the ClusterIP Service
+            # created in chunk-service.yaml.
+            - name: CHUNK_HOSTS
+              value: "kai-chunk-0:50051,kai-chunk-1:50051,kai-chunk-2:50051"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5

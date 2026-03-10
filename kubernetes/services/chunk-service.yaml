@@ -1,0 +1,79 @@
+# -----------------------------------------------------------
+# chunk-service.yaml
+# ClusterIP Services for model chunk gRPC servers.
+#
+# Each chunk gets its own Service so the gateway can address
+# chunks by stable DNS name: kai-chunk-0, kai-chunk-1, etc.
+# The gateway's CHUNK_HOSTS env var references these names.
+#
+# When using the controller.py script, services are created
+# programmatically for any number of chunks. This file
+# provides the template for 3 chunks (default configuration).
+# -----------------------------------------------------------
+
+# ---- Chunk 0 ----
+apiVersion: v1
+kind: Service
+metadata:
+  name: kai-chunk-0
+  labels:
+    app: kai
+    component: chunk
+    chunk-id: "0"
+spec:
+  type: ClusterIP
+  selector:
+    app: kai
+    component: chunk
+    chunk-id: "0"
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+      protocol: TCP
+
+---
+
+# ---- Chunk 1 ----
+apiVersion: v1
+kind: Service
+metadata:
+  name: kai-chunk-1
+  labels:
+    app: kai
+    component: chunk
+    chunk-id: "1"
+spec:
+  type: ClusterIP
+  selector:
+    app: kai
+    component: chunk
+    chunk-id: "1"
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+      protocol: TCP
+
+---
+
+# ---- Chunk 2 ----
+apiVersion: v1
+kind: Service
+metadata:
+  name: kai-chunk-2
+  labels:
+    app: kai
+    component: chunk
+    chunk-id: "2"
+spec:
+  type: ClusterIP
+  selector:
+    app: kai
+    component: chunk
+    chunk-id: "2"
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+      protocol: TCP

@@ -1,0 +1,116 @@
+# -----------------------------------------------------------
+# chunk-deployment.yaml
+# Deployment template for model chunk gRPC servers.
+#
+# Deploy one instance per chunk. Customize CHUNK_ID for each.
+# Each pod requests 1 NVIDIA GPU and runs a gRPC server
+# serving a single model chunk.
+#
+# Usage:
+#   For chunk 0:
+#     kubectl apply -f chunk-deployment.yaml
+#   For additional chunks, copy and change CHUNK_ID and metadata name,
+#   or use the controller.py script which creates them programmatically.
+# -----------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kai-chunk-0
+  labels:
+    app: kai
+    component: chunk
+    chunk-id: "0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kai
+      component: chunk
+      chunk-id: "0"
+  template:
+    metadata:
+      labels:
+        app: kai
+        component: chunk
+        chunk-id: "0"
+    spec:
+      containers:
+        - name: chunk-server
+          image: kai-chunk:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+          env:
+            - name: CHUNK_ID
+              value: "0"
+            - name: NUM_CHUNKS
+              value: "3"
+            - name: MODEL_TYPE
+              value: "transformer"
+            - name: WEIGHTS_DIR
+              value: "/data/chunks"
+            - name: PORT
+              value: "50051"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: chunk-data
+              mountPath: /data/chunks
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                  import grpc
+                  from proto import inference_pb2, inference_pb2_grpc
+                  ch = grpc.insecure_channel('localhost:50051')
+                  stub = inference_pb2_grpc.InferenceServiceStub(ch)
+                  r = stub.HealthCheck(inference_pb2.HealthRequest())
+                  assert r.ready
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                  import grpc
+                  from proto import inference_pb2, inference_pb2_grpc
+                  ch = grpc.insecure_channel('localhost:50051')
+                  stub = inference_pb2_grpc.InferenceServiceStub(ch)
+                  r = stub.HealthCheck(inference_pb2.HealthRequest())
+                  assert r.ready
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+      volumes:
+        - name: chunk-data
+          emptyDir: {}
+      # Ensure chunks are spread across nodes when possible
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: kai
+                    component: chunk
+                topologyKey: kubernetes.io/hostname
+      # Tolerate GPU-tainted nodes
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule

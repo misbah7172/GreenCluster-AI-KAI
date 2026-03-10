@@ -1,0 +1,120 @@
+# ============================================================
+# docker-compose.yml
+# Local multi-container test for the KAI inference pipeline.
+#
+# Launches:
+#   - 3 chunk servers (transformer, 3 chunks)
+#   - 1 gateway that chains the 3 chunks
+#   - 1 monitor service collecting GPU/CPU metrics
+#
+# Usage:
+#   docker compose up --build
+#   curl -X POST http://localhost:8080/infer   (send tensor)
+#   curl http://localhost:9090/metrics/summary  (metrics)
+# ============================================================
+
+services:
+  # ---- Model Chunk Servers ----
+  chunk-0:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chunk
+    environment:
+      - CHUNK_ID=0
+      - NUM_CHUNKS=3
+      - MODEL_TYPE=transformer
+      - WEIGHTS_DIR=/data/chunks
+      - PORT=50051
+    volumes:
+      - chunk-data:/data/chunks
+    ports:
+      - "50051:50051"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  chunk-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chunk
+    environment:
+      - CHUNK_ID=1
+      - NUM_CHUNKS=3
+      - MODEL_TYPE=transformer
+      - WEIGHTS_DIR=/data/chunks
+      - PORT=50052
+    volumes:
+      - chunk-data:/data/chunks
+    ports:
+      - "50052:50052"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  chunk-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chunk
+    environment:
+      - CHUNK_ID=2
+      - NUM_CHUNKS=3
+      - MODEL_TYPE=transformer
+      - WEIGHTS_DIR=/data/chunks
+      - PORT=50053
+    volumes:
+      - chunk-data:/data/chunks
+    ports:
+      - "50053:50053"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ---- Inference Gateway ----
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gateway
+    environment:
+      - CHUNK_HOSTS=chunk-0:50051,chunk-1:50052,chunk-2:50053
+      - GATEWAY_PORT=8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - chunk-0
+      - chunk-1
+      - chunk-2
+
+  # ---- Monitor Service ----
+  monitor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.monitor
+    environment:
+      - MONITOR_PORT=9090
+      - GPU_INDEX=0
+      - SAMPLE_INTERVAL=1.0
+      - ENABLE_GPU=true
+    ports:
+      - "9090:9090"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  chunk-data:

@@ -1,0 +1,30 @@
+# -----------------------------------------------------------
+# gateway-service.yaml
+# NodePort Service for the inference gateway.
+#
+# Exposes the gateway HTTP endpoint externally so the
+# experiment runner (k8s_runner.py) can send inference
+# requests from outside the cluster.
+#
+# Access:
+#   curl -X POST http://<node-ip>:<nodePort>/infer
+#   curl http://<node-ip>:<nodePort>/health
+# -----------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: kai-gateway
+  labels:
+    app: kai
+    component: gateway
+spec:
+  type: NodePort
+  selector:
+    app: kai
+    component: gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+      protocol: TCP

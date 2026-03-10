@@ -1,0 +1,32 @@
+# -----------------------------------------------------------
+# gpu-resource-quota.yaml
+# ResourceQuota for controlling GPU allocation in the
+# KAI namespace.
+#
+# Prevents the benchmarking workloads from consuming all
+# GPU resources in a shared cluster. Adjust the limits
+# based on your cluster capacity.
+#
+# Usage:
+#   kubectl create namespace kai
+#   kubectl apply -f gpu-resource-quota.yaml -n kai
+# -----------------------------------------------------------
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: kai-gpu-quota
+  namespace: kai
+  labels:
+    app: kai
+spec:
+  hard:
+    # Maximum number of GPUs across all pods in the namespace
+    requests.nvidia.com/gpu: "4"
+    limits.nvidia.com/gpu: "4"
+    # General resource caps
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: "16Gi"
+    limits.memory: "32Gi"
+    # Maximum number of pods
+    pods: "10"
