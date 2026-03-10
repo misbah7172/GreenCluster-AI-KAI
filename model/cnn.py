@@ -6,8 +6,12 @@ an alternative benchmark workload. The model is built as a sequence of
 named layers so it can be split into chunks by the chunker module.
 """
 
+import logging
+
 import torch
 import torch.nn as nn
+
+logger = logging.getLogger(__name__)
 
 
 class ConvBlock(nn.Module):

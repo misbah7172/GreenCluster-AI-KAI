@@ -1,13 +1,34 @@
-# KAI -- Kubernetes AI Inference Energy Benchmarking Platform
+# KAI — Kubernetes AI Inference Energy Benchmarking Platform
 
 ## Project Overview
 
 KAI is an experimental platform designed to measure and compare the energy consumption and performance characteristics of AI inference workloads under two distinct deployment scenarios:
 
-1. **Local Execution** -- Running an AI model on a single GPU without any orchestration layer.
-2. **Kubernetes Execution** -- Running the same AI model split into chunks, distributed across multiple nodes in a Kubernetes cluster, with inter-chunk communication via gRPC.
+1. **Local Execution** — Running an AI model on a single GPU without any orchestration layer.
+2. **Kubernetes Execution** — Running the same AI model split into chunks, distributed across multiple nodes in a Kubernetes cluster, with inter-chunk communication via gRPC.
 
 The platform collects GPU power draw, CPU usage, inference latency, throughput, and total energy consumption, then produces comparative analysis and visualizations.
+
+---
+
+## Table of Contents
+
+- [Gap Analysis](#gap-analysis)
+- [Project Goals](#project-goals)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Project Structure](#project-structure)
+- [Architecture](#architecture)
+- [Quick Start — Local Mode](#quick-start--local-mode)
+- [Quick Start — Kubernetes Mode](#quick-start--kubernetes-mode)
+- [Running Both Modes](#running-both-modes)
+- [Analysis & Plotting](#analysis--plotting)
+- [Dashboard Usage](#dashboard-usage)
+- [CLI Reference](#cli-reference)
+- [Key Metrics](#key-metrics)
+- [Expected Outputs](#expected-outputs)
+- [Technology Stack](#technology-stack)
+- [Integration Testing Checklist](#integration-testing-checklist)
 
 ---
 
@@ -50,7 +71,7 @@ Organizations deploying AI models lack data to answer questions such as:
 
 #### 6. Absence of Reproducible Experiment Infrastructure
 
-Ad hoc benchmarking produces inconsistent results. There is no turnkey system that automates the full cycle of: deploy model, run controlled inference, collect synchronized metrics, tear down environment, and produce analysis -- for both local and distributed modes.
+Ad hoc benchmarking produces inconsistent results. There is no turnkey system that automates the full cycle of: deploy model, run controlled inference, collect synchronized metrics, tear down environment, and produce analysis — for both local and distributed modes.
 
 ### Summary Table
 
@@ -79,13 +100,440 @@ Ad hoc benchmarking produces inconsistent results. There is no turnkey system th
 
 ### Secondary Goals
 
-5. **Develop a model chunking mechanism** that splits a PyTorch model into independent layers groups, each deployable as a standalone microservice.
+5. **Develop a model chunking mechanism** that splits a PyTorch model into independent layer groups, each deployable as a standalone microservice.
 
 6. **Implement real-time GPU and CPU monitoring** with 1-second sampling resolution, producing time-series data correlated with inference events.
 
 7. **Create a visualization dashboard** for interactive exploration of experiment results.
 
 8. **Generate publication-quality analysis** including derived metrics (energy per inference, performance per watt) and comparative plots.
+
+---
+
+## Prerequisites
+
+| Requirement | Details |
+|-------------|---------|
+| NVIDIA GPU | Any CUDA-capable GPU (tested with RTX 3050 Ti) |
+| NVIDIA Drivers | Compatible with CUDA 12.x |
+| CUDA Toolkit | 12.2 or later |
+| Docker | With NVIDIA Container Toolkit (for building images) |
+| Kubernetes | Cluster with GPU nodes and NVIDIA device plugin (for K8s mode) |
+| Python | 3.10 or later |
+| OS | Linux or Windows (tested on Windows with PowerShell) |
+
+---
+
+## Installation
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd KAI
+
+# Install Python dependencies
+pip install -r requirements.txt
+```
+
+The `requirements.txt` includes: PyTorch, pynvml, psutil, grpcio, grpcio-tools, protobuf, kubernetes, streamlit, matplotlib, pandas, numpy.
+
+### Verify Installation
+
+```bash
+# Check GPU is accessible
+python -c "import pynvml; pynvml.nvmlInit(); print('GPU:', pynvml.nvmlDeviceGetName(pynvml.nvmlDeviceGetHandleByIndex(0)))"
+
+# Check PyTorch CUDA
+python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+```
+
+---
+
+## Project Structure
+
+```
+KAI/
+├── model/                        # AI model definitions and chunking
+│   ├── transformer.py            #   Transformer encoder model
+│   ├── cnn.py                    #   CNN classification model
+│   ├── chunker.py                #   Model splitting into N sequential chunks
+│   ├── chunk_server.py           #   gRPC server for a single model chunk
+│   └── gateway.py                #   HTTP gateway chaining chunk services
+│
+├── monitoring/                   # Power and performance monitoring
+│   ├── gpu_monitor.py            #   NVML-based GPU power/util/temp sampling
+│   ├── cpu_monitor.py            #   psutil-based CPU usage sampling
+│   ├── metrics.py                #   Unified MetricsCollector (GPU + CPU + latency)
+│   └── monitor_service.py        #   HTTP service wrapping MetricsCollector
+│
+├── experiments/                  # Experiment runners
+│   ├── local_runner.py           #   Single-GPU inference experiment
+│   ├── k8s_runner.py             #   Kubernetes distributed inference experiment
+│   └── experiment_runner.py      #   Unified orchestrator (local, k8s, or both)
+│
+├── analysis/                     # Post-experiment analysis
+│   ├── analyzer.py               #   Metrics computation and comparison
+│   └── plots.py                  #   Matplotlib visualization (8 plot types)
+│
+├── dashboard/                    # Web dashboard
+│   └── app.py                    #   Streamlit interactive visualization
+│
+├── kubernetes/                   # Kubernetes configuration
+│   ├── controller.py             #   Python K8s controller (deploy/status/teardown)
+│   ├── deployments/              #   Deployment YAMLs (chunk, gateway, monitor)
+│   ├── services/                 #   Service YAMLs (ClusterIP, NodePort)
+│   └── gpu-resource-quota.yaml   #   GPU resource quota for namespace
+│
+├── docker/                       # Container images
+│   ├── Dockerfile.chunk          #   Model chunk microservice (CUDA base)
+│   ├── Dockerfile.gateway        #   Inference gateway
+│   ├── Dockerfile.monitor        #   Monitoring DaemonSet
+│   └── docker-compose.yml        #   Local multi-container testing
+│
+├── proto/                        # gRPC definitions
+│   └── inference.proto           #   InferenceService with Infer + HealthCheck RPCs
+│
+├── logs/                         # Experiment output (JSON)
+├── docs/                         # Phase documentation
+├── requirements.txt
+├── BUILD_GUIDE.md
+└── README.md
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        EXPERIMENT RUNNER                        │
+│              experiments/experiment_runner.py                    │
+│         (CLI: --mode local | kubernetes | both)                 │
+└──────────────┬──────────────────────────┬───────────────────────┘
+               │                          │
+       ┌───────▼───────┐         ┌────────▼────────┐
+       │  LOCAL RUNNER  │         │   K8S RUNNER     │
+       │ local_runner.py│         │  k8s_runner.py   │
+       └───────┬───────┘         └────────┬─────────┘
+               │                          │
+       ┌───────▼───────┐         ┌────────▼─────────┐
+       │  Full Model    │         │  K8s Controller   │
+       │  (single GPU)  │         │  controller.py    │
+       │                │         │                   │
+       │  ┌──────────┐  │         │  ┌─────────────┐  │
+       │  │model.eval│  │         │  │Deploy Chunks │  │
+       │  │  (GPU)   │  │         │  │Deploy Gateway│  │
+       │  └──────────┘  │         │  │Deploy Monitor│  │
+       └───────┬───────┘         │  └──────┬──────┘  │
+               │                  └─────────┼─────────┘
+               │                            │
+       ┌───────▼───────┐         ┌──────────▼──────────┐
+       │ MetricsCollect │         │   Kubernetes Cluster │
+       │ gpu_monitor.py │         │                      │
+       │ cpu_monitor.py │         │  ┌──────┐ ┌──────┐  │
+       │  metrics.py    │         │  │Chunk0│→│Chunk1│→ │
+       └───────┬───────┘         │  └──────┘ └──────┘  │
+               │                  │       ↕ gRPC         │
+       ┌───────▼───────┐         │  ┌──────────────┐   │
+       │  logs/*.json   │         │  │   Gateway     │   │
+       └───────────────┘         │  │  (HTTP→gRPC) │   │
+                                  │  └──────────────┘   │
+                                  │  ┌──────────────┐   │
+                                  │  │Monitor (NVML)│   │
+                                  │  └──────┬───────┘   │
+                                  └─────────┼───────────┘
+                                            │
+                                  ┌─────────▼───────────┐
+                                  │    logs/*.json       │
+                                  └─────────────────────┘
+
+                    ┌───────────────────────────────────┐
+                    │          ANALYSIS LAYER            │
+                    │                                   │
+                    │  analyzer.py  →  CSV / JSON       │
+                    │  plots.py     →  8 PNG plots      │
+                    │  dashboard/   →  Streamlit app    │
+                    └───────────────────────────────────┘
+```
+
+### Data Flow
+
+1. **Experiment Runner** selects mode and calls the appropriate runner.
+2. **Local Runner** loads the full model on one GPU, runs inference N times, collects power/CPU metrics via `MetricsCollector`, and writes results to `logs/`.
+3. **K8s Runner** uses the controller to deploy model chunks as gRPC microservices, sends inference requests through the gateway, collects metrics from the monitor DaemonSet, and writes results to `logs/`.
+4. **Analysis** loads result JSON files, computes derived metrics (energy, efficiency, percentiles), and produces comparison tables and plots.
+5. **Dashboard** provides interactive web-based exploration of all results.
+
+### Communication Protocols
+
+| Path | Protocol | Details |
+|------|----------|---------|
+| Client → Gateway | HTTP | POST `/infer`, GET `/health` |
+| Gateway → Chunks | gRPC | Binary tensor serialization (256 MB max) |
+| Client → Monitor | HTTP | GET `/metrics`, POST `/start`, `/stop` |
+| Chunks ↔ Chunks | gRPC | Sequential pipeline (Chunk 0 → 1 → ... → N) |
+
+---
+
+## Quick Start — Local Mode
+
+Run inference on a single GPU and collect energy metrics:
+
+```bash
+# Basic run (Transformer model, 50 iterations)
+python -m experiments.local_runner
+
+# Custom configuration
+python -m experiments.local_runner \
+    --model transformer \
+    --iterations 100 \
+    --batch-size 16 \
+    --warmup 10 \
+    --monitor-interval 0.5
+```
+
+Results are saved to `logs/local_results_<timestamp>.json` containing:
+- Average inference latency (ms)
+- Average GPU power (W)
+- Total energy consumed (Wh)
+- Throughput (inferences/sec)
+- Per-sample GPU power and utilization time-series
+- Per-sample CPU utilization time-series
+- Per-iteration inference latencies
+
+---
+
+## Quick Start — Kubernetes Mode
+
+Deploy the chunked model to a Kubernetes cluster and run distributed inference:
+
+### 1. Build Docker Images
+
+```bash
+# Build chunk server image
+docker build -f docker/Dockerfile.chunk -t kai-chunk:latest .
+
+# Build gateway image
+docker build -f docker/Dockerfile.gateway -t kai-gateway:latest .
+
+# Build monitor image
+docker build -f docker/Dockerfile.monitor -t kai-monitor:latest .
+```
+
+### 2. Deploy to Kubernetes
+
+```bash
+# Deploy all components (3 chunks)
+python -m kubernetes.controller deploy --num-chunks 3 --model transformer --wait
+
+# Check status
+python -m kubernetes.controller status
+
+# Check gateway health
+python -m kubernetes.controller health
+```
+
+### 3. Run Experiment
+
+```bash
+python -m experiments.k8s_runner \
+    --model transformer \
+    --num-chunks 3 \
+    --iterations 100 \
+    --batch-size 16
+```
+
+### 4. Teardown
+
+```bash
+python -m kubernetes.controller teardown
+```
+
+Results are saved to `logs/k8s_results_<timestamp>.json` containing:
+- Average end-to-end latency (ms)
+- Average gateway latency (ms)
+- Average network overhead (ms)
+- Total GPU power across all nodes (W)
+- Total energy consumed (Wh)
+- Per-chunk average latency
+- Per-node GPU metrics
+
+---
+
+## Running Both Modes
+
+Execute local and Kubernetes experiments back-to-back with a single command:
+
+```bash
+python -m experiments.experiment_runner \
+    --mode both \
+    --model transformer \
+    --num-chunks 3 \
+    --iterations 100 \
+    --batch-size 16
+```
+
+This produces `logs/experiment_<timestamp>.json` with both result sets and a comparison section including ratios (K8s/Local) for all key metrics.
+
+---
+
+## Analysis & Plotting
+
+### Metrics Analysis
+
+```bash
+# Analyze a combined experiment file
+python -m analysis.analyzer --combined logs/experiment_<timestamp>.json
+
+# Analyze separate files
+python -m analysis.analyzer \
+    --local logs/local_results_<ts>.json \
+    --k8s logs/k8s_results_<ts>.json \
+    --output analysis/output
+```
+
+The analyzer computes:
+- Latency percentiles (p50, p90, p95, p99) and standard deviation
+- Energy per inference
+- Performance per watt
+- Side-by-side comparison with ratio (K8s / Local)
+- Exports CSV and JSON summaries
+
+### Plot Generation
+
+```bash
+# Generate all plots
+python -m analysis.plots --combined logs/experiment_<timestamp>.json --output analysis/output
+
+# Or from separate files
+python -m analysis.plots \
+    --local logs/local_results_<ts>.json \
+    --k8s logs/k8s_results_<ts>.json
+```
+
+Eight plot types are generated as PNG files:
+
+| Plot | Description |
+|------|-------------|
+| Power over time | GPU power draw line chart (both modes overlaid) |
+| GPU utilization over time | Utilization percentage line chart |
+| Latency comparison | Bar chart of average latency |
+| Energy comparison | Bar chart of total energy consumed |
+| Energy efficiency | Bar chart of energy per inference |
+| Throughput comparison | Bar chart of inference rate |
+| Latency distribution | Box plot of per-iteration latencies |
+| Per-chunk latency | Bar chart of K8s chunk processing times |
+
+---
+
+## Dashboard Usage
+
+Launch the interactive Streamlit dashboard:
+
+```bash
+python -m streamlit run dashboard/app.py
+```
+
+The dashboard provides:
+
+- **Sidebar**: Select result files from `logs/`, filter by mode (Local / K8s / Both), load a second file for comparison, enable auto-refresh.
+- **Summary Metrics**: Comparison table with ratio column, or KPI metric cards for single-mode results.
+- **GPU Power Over Time**: Interactive line chart from per-sample GPU power data.
+- **GPU Utilization Over Time**: Interactive line chart from utilization samples.
+- **Latency Comparison**: Average latency bar chart and per-iteration distribution.
+- **Energy Comparison**: Total energy and energy-per-inference bar charts.
+- **Per-Chunk Latency**: K8s-only bar chart of chunk processing times.
+- **Experiment Configuration**: Collapsible JSON view of experiment parameters.
+- **Raw JSON Viewer**: Full raw data inspection.
+
+### Custom Logs Directory
+
+```bash
+# Use a custom results directory
+KAI_LOGS_DIR=path/to/results python -m streamlit run dashboard/app.py
+
+# Headless mode (e.g. on a remote server)
+python -m streamlit run dashboard/app.py --server.headless true --server.port 8501
+```
+
+---
+
+## CLI Reference
+
+### Unified Experiment Runner
+
+```
+python -m experiments.experiment_runner [OPTIONS]
+
+Options:
+  --mode          local | kubernetes | both    (default: both)
+  --model         transformer | cnn            (default: transformer)
+  --num-chunks    2-8                          (default: 3)
+  --iterations    Number of inference runs     (default: 50)
+  --batch-size    Input batch size             (default: 8)
+  --warmup        Warmup iterations            (default: 5)
+  --output-dir    Results directory            (default: logs)
+  --device        Torch device for local mode  (default: auto)
+  --monitor-interval  Sampling interval (s)    (default: 1.0)
+  --gateway-url   Override K8s gateway URL     (default: auto-detect)
+  --wait-timeout  Pod readiness timeout (s)    (default: 300)
+  --no-teardown   Keep K8s resources after run
+```
+
+### Kubernetes Controller
+
+```
+python -m kubernetes.controller <command> [OPTIONS]
+
+Commands:
+  deploy    Deploy chunks, gateway, and monitor
+            --num-chunks N  --model NAME  --wait  --timeout SECS
+  status    Show pod/deployment status
+  health    Check gateway health
+            --gateway-url URL
+  metrics   Collect metrics from monitor service
+  teardown  Delete all KAI resources
+```
+
+### Analyzer
+
+```
+python -m analysis.analyzer [OPTIONS]
+
+Options:
+  --local      Path to local results JSON
+  --k8s        Path to K8s results JSON
+  --combined   Path to combined experiment JSON
+  --output     Output directory (default: analysis/output)
+```
+
+### Plot Generator
+
+```
+python -m analysis.plots [OPTIONS]
+
+Options:
+  --local      Path to local results JSON
+  --k8s        Path to K8s results JSON
+  --combined   Path to combined experiment JSON
+  --output     Output directory (default: analysis/output)
+```
+
+---
+
+## Key Metrics
+
+The following metrics are computed for each experiment run and used for comparison:
+
+```
+Total Energy (Wh)          = Average Power (W) × Total Runtime (s) / 3600
+Energy per Inference (Wh)  = Total Energy (Wh) / Number of Inferences
+Throughput (inf/s)         = Number of Inferences / Total Runtime (s)
+Performance per Watt       = Throughput / Average Power (W)
+Network Overhead (K8s)     = End-to-End Latency − Sum of Chunk Compute Times
+```
+
+Latency percentiles (p50, p90, p95, p99) and standard deviation are also computed.
 
 ---
 
@@ -96,111 +544,59 @@ Ad hoc benchmarking produces inconsistent results. There is no turnkey system th
 | Output | Format | Description |
 |--------|--------|-------------|
 | Local experiment results | JSON | Per-run latency, GPU power samples, CPU usage, throughput, total energy |
-| Kubernetes experiment results | JSON | Per-run latency (end-to-end and per-chunk), aggregated GPU power across nodes, network overhead, total energy |
-| GPU monitoring logs | CSV/JSON | Time-series of power draw (W), utilization (%), memory usage (MB), temperature (C) at 1-second intervals |
-| Combined experiment summary | JSON/CSV | Side-by-side metrics for both modes from a single experiment session |
+| Kubernetes experiment results | JSON | Per-run latency (e2e + per-chunk), GPU power across nodes, network overhead, total energy |
+| Combined experiment summary | JSON | Both modes with comparison ratios in a single file |
 
 ### Analysis Outputs
 
 | Output | Format | Description |
 |--------|--------|-------------|
-| Total energy consumption (Wh) | Numeric | Energy used per experiment in each mode |
-| Average GPU power (W) | Numeric | Mean power draw across the experiment duration |
-| Average inference latency (ms) | Numeric | Mean time per inference in each mode |
-| Throughput (inferences/sec) | Numeric | Inference rate in each mode |
-| Energy per inference (Wh) | Numeric | Energy cost of a single inference |
-| Performance-per-watt ratio | Numeric | Throughput divided by average power |
 | Summary comparison table | CSV | All metrics side-by-side for local vs. Kubernetes |
-
-### Visualization Outputs
-
-| Output | Format | Description |
-|--------|--------|-------------|
-| GPU power over time | PNG plot | Line chart showing power draw during inference for both modes |
-| GPU utilization over time | PNG plot | Line chart comparing GPU utilization |
-| Latency comparison | PNG plot | Bar chart of average latency (local vs. Kubernetes) |
-| Energy comparison | PNG plot | Bar chart of total energy consumed |
-| Energy efficiency comparison | PNG plot | Bar chart of energy per inference |
-| Throughput comparison | PNG plot | Bar chart of inference rate |
-| Interactive dashboard | Streamlit app | Web-based exploration of all metrics and plots |
-
-### Infrastructure Outputs
-
-| Output | Description |
-|--------|-------------|
-| Dockerfiles | Container definitions for model chunks, gateway, and monitor services |
-| Kubernetes manifests | Deployment, service, and resource quota YAML files |
-| gRPC service definition | Protocol buffer definition for inter-chunk tensor communication |
-| Experiment runner CLI | Single command to execute full experiment in local, Kubernetes, or both modes |
+| Analysis export | JSON | Machine-readable comparison data |
+| Visualization plots | 8 × PNG | Publication-quality charts (150 DPI) |
+| Interactive dashboard | Streamlit | Web-based exploration of all metrics and plots |
 
 ---
 
-## Key Metrics Computed
+## Technology Stack
 
-The following metrics are computed for each experiment run and used for comparison:
-
-```
-Total Energy (Wh) = Average Power (W) x Total Runtime (s) / 3600
-
-Energy per Inference (Wh) = Total Energy (Wh) / Number of Inferences
-
-Throughput = Number of Inferences / Total Runtime (s)
-
-Performance per Watt = Throughput / Average Power (W)
-
-Network Overhead (K8s only) = End-to-End Latency - Sum of Chunk Compute Times
-```
-
----
-
-## Prerequisites
-
-- NVIDIA GPU with CUDA support
-- NVIDIA drivers and CUDA toolkit installed
-- Docker with NVIDIA Container Toolkit
-- Kubernetes cluster with GPU-equipped nodes and NVIDIA device plugin (for K8s mode)
-- Python 3.10 or later
+| Component | Technology |
+|-----------|-----------|
+| Language | Python 3.10+ |
+| Deep Learning | PyTorch |
+| GPU Monitoring | pynvml (NVIDIA NVML) |
+| CPU Monitoring | psutil |
+| Inter-chunk Communication | gRPC + Protocol Buffers |
+| Containerization | Docker (NVIDIA CUDA 12.2 base) |
+| Orchestration | Kubernetes |
+| K8s Client | `kubernetes` Python package |
+| Dashboard | Streamlit |
+| Plotting | Matplotlib |
+| Data Handling | Pandas, NumPy |
+| Serialization | JSON, CSV |
 
 ---
 
-## Project Structure
+## Integration Testing Checklist
 
-```
-project/
-  model/              AI model definitions and chunking logic
-  monitoring/         GPU and CPU monitoring modules
-  kubernetes/         Kubernetes manifests and controller
-  docker/             Dockerfiles for all services
-  experiments/        Experiment runner scripts
-  dashboard/          Streamlit visualization application
-  logs/               Experiment output data
-  analysis/           Post-experiment analysis and plotting
-  proto/              gRPC protocol buffer definitions
-```
+- [ ] Local mode runs end-to-end and produces logs
+- [ ] GPU monitoring records power, utilization, and temperature data correctly
+- [ ] CPU monitoring records per-core and overall utilization
+- [ ] Model chunking produces correct outputs (chunk chain output == full model output)
+- [ ] gRPC communication between chunks works (serialize → transmit → deserialize)
+- [ ] Docker images build successfully (chunk, gateway, monitor)
+- [ ] Kubernetes manifests deploy without errors
+- [ ] Kubernetes controller deploys, checks status, and tears down
+- [ ] Kubernetes mode runs end-to-end and produces logs
+- [ ] Analysis script processes both local and K8s result sets
+- [ ] Analyzer exports CSV and JSON summaries
+- [ ] All 8 plot types are generated as PNG files
+- [ ] Dashboard loads and displays data from result files
+- [ ] Unified experiment runner works in all three modes (local, kubernetes, both)
+- [ ] Combined results file includes comparison ratios
 
 ---
 
-## How to Use (after implementation)
+## License
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run local experiment
-python -m experiments.experiment_runner --mode local --model transformer --iterations 100
-
-# Run Kubernetes experiment
-python -m experiments.experiment_runner --mode kubernetes --model transformer --num-chunks 4 --iterations 100
-
-# Run both and compare
-python -m experiments.experiment_runner --mode both --model transformer --num-chunks 4 --iterations 100
-
-# Analyze results
-python -m analysis.analyzer --input logs/
-
-# Generate plots
-python -m analysis.plots --input logs/
-
-# Launch dashboard
-streamlit run dashboard/app.py
-```
+This project is for academic and research purposes.

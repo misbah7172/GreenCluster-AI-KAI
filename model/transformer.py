@@ -6,9 +6,13 @@ workload. The model is built as a sequence of named layers so it can be
 split into chunks by the chunker module.
 """
 
+import logging
+import math
+
 import torch
 import torch.nn as nn
-import math
+
+logger = logging.getLogger(__name__)
 
 
 class PositionalEncoding(nn.Module):
