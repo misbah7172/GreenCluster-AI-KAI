@@ -85,3 +85,95 @@ Any HuggingFace `AutoModelForCausalLM` architecture is supported.
   - 30 tests for distributed inference (Phases 14-18)
 
 ---
+
+## Where KAI is NOT the Best Tool
+
+KAI solves a specific problem. Here are scenarios where other tools are a better fit:
+
+### 1. You Have a Single Powerful GPU (24GB+ VRAM)
+
+If your machine already has enough VRAM to load the entire model, distributing it across nodes adds unnecessary network latency. Use **Ollama** or **vLLM** instead — they'll be significantly faster because there's zero inter-node communication overhead.
+
+> **Example:** You have an RTX 4090 (24GB) and want to run LLaMA 7B (14GB in fp16). Just load it locally. KAI would be slower here.
+
+### 2. You Need Production-Grade Throughput
+
+KAI is designed for **low-end hardware clusters**, not high-throughput production serving. If you need to serve hundreds of concurrent users with low latency:
+
+- **vLLM** — Optimized with PagedAttention, continuous batching, and tensor parallelism on high-end GPUs.
+- **TGI (Text Generation Inference)** — HuggingFace's production server with batching and quantization.
+- **TensorRT-LLM** — NVIDIA's maximum-performance inference engine.
+
+KAI's sequential chunk pipeline (Node A -> Node B -> Node C) adds network round-trips per token. Production systems use tensor parallelism (all GPUs compute simultaneously), which is fundamentally faster.
+
+### 3. You Want Quick Local Chat with No Setup
+
+If you just want to chat with a model on your own PC without configuring Kubernetes, Docker, or Python environments:
+
+- **Ollama** — Single binary, `ollama run llama3`, done. No Python, no K8s, no Docker.
+- **LM Studio** — GUI app, download a model, click play.
+- **GPT4All** — Desktop app with offline models.
+
+KAI requires Python, PyTorch, Kubernetes, Docker, and multiple dependencies. It's an infrastructure tool, not a consumer app.
+
+### 4. You Don't Have Multiple Machines
+
+KAI's core value is **distributing a model across multiple nodes**. If you only have one PC, KAI's distributed features don't help. Instead:
+
+- **AirLLM** — Streams layers from disk on a single machine (slow but works with just disk space).
+- **Ollama with quantization** — Runs 4-bit quantized models that fit in less VRAM.
+- **llama.cpp** — Runs quantized models on CPU with no GPU required.
+
+### 5. You Need Volunteer/Public Network Distribution
+
+KAI runs on your **private LAN cluster**. If you don't own the hardware and want to borrow compute from strangers over the internet:
+
+- **Petals** — Peer-to-peer swarm over the public internet. No hardware ownership needed.
+
+KAI assumes you control all nodes, configure Kubernetes, and have a local network. It doesn't work across the internet.
+
+### 6. You Need Fine-Tuning, Not Just Inference
+
+KAI is **inference-only**. It generates text from pre-trained models but cannot train or fine-tune them. For training distributed across multiple machines:
+
+- **DeepSpeed** — Distributed training with ZeRO optimization.
+- **FSDP (Fully Sharded Data Parallel)** — PyTorch's native distributed training.
+- **Megatron-LM** — NVIDIA's large-scale training framework.
+
+### 7. You Need Mobile or Edge Deployment
+
+KAI targets server/desktop hardware with NVIDIA GPUs. For phones, Raspberry Pi, or embedded devices:
+
+- **llama.cpp** — Runs on ARM, x86, Apple Silicon, even Android.
+- **MLC LLM** — Compiles models for mobile GPUs.
+- **ONNX Runtime** — Cross-platform inference on any hardware.
+
+### 8. You Need Maximum Accuracy with Quantization
+
+KAI distributes models in fp16/fp32 (full precision). If your priority is fitting large models on limited hardware with minimal quality loss through quantization:
+
+- **Ollama / llama.cpp** — Supports GGUF 2/3/4/5/6/8-bit quantization.
+- **GPTQ / AWQ** — GPU-optimized quantized inference with near-full-precision quality.
+- **bitsandbytes** — 4-bit and 8-bit quantization integrated with HuggingFace.
+
+KAI currently doesn't quantize — it splits the full-precision model across nodes instead. These are complementary approaches (you could quantize AND distribute), but KAI doesn't do quantization natively.
+
+---
+
+## Honest Summary
+
+| KAI's Strength | KAI's Weakness |
+|----------------|----------------|
+| Pool multiple cheap GPUs to run large models | Slower than single powerful GPU (network overhead) |
+| Kubernetes-native with health checks and scaling | Complex setup vs. single-binary tools like Ollama |
+| Energy benchmarking (unique feature) | Not designed for production throughput |
+| Smart auto-partitioning based on real hardware | Inference only — no training or fine-tuning |
+| Private and secure (your own cluster) | Requires multiple machines to be useful |
+| Works with any HuggingFace model | No quantization support (full precision only) |
+| Full monitoring + dashboard | Overkill for casual local use |
+
+**KAI is best when:** You have 2+ low-end PCs with small GPUs, you want to run a model that doesn't fit on any single one, and you care about energy efficiency and monitoring.
+
+**KAI is NOT best when:** You have one powerful GPU, need production throughput, want zero-setup local chat, or only have one machine.
+
+---
