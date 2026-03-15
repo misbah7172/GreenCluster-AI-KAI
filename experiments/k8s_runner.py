@@ -114,6 +114,8 @@ def run_k8s_experiment(
     wait_timeout: float = 300.0,
     warmup_iterations: int = 5,
     auto_teardown: bool = True,
+    enable_deas: bool = False,
+    deas_cooldown: float = 30.0,
 ) -> Dict[str, Any]:
     """Run a Kubernetes-based inference experiment.
 
@@ -137,6 +139,10 @@ def run_k8s_experiment(
         Number of untimed warmup iterations.
     auto_teardown : bool
         If True, teardown K8s resources after the experiment.
+    enable_deas : bool
+        Enable Dynamic Energy-Aware Scheduling during the experiment.
+    deas_cooldown : float
+        Minimum seconds between DEAS migration attempts.
 
     Returns
     -------
@@ -179,6 +185,21 @@ def run_k8s_experiment(
     # --- Reset and start monitoring ---
     ctrl.reset_monitoring()
     ctrl.start_monitoring()
+
+    # --- Start DEAS if enabled ---
+    deas_active = False
+    if enable_deas:
+        try:
+            from monitoring.event_bus import EventBus
+            from model.auto_partitioner import AutoPartitioner
+            event_bus = EventBus()
+            event_bus.start()
+            partitioner = AutoPartitioner()
+            ctrl.start_deas(event_bus, partitioner, cooldown_s=deas_cooldown)
+            deas_active = True
+            logger.info("DEAS enabled (cooldown=%.1fs)", deas_cooldown)
+        except Exception as e:
+            logger.warning("Failed to start DEAS: %s", e)
 
     # --- Warmup iterations ---
     logger.info("Running %d warmup iterations...", warmup_iterations)
@@ -233,6 +254,24 @@ def run_k8s_experiment(
     # --- Stop monitoring and collect metrics ---
     ctrl.stop_monitoring()
     node_metrics = ctrl.collect_metrics()
+
+    # --- Stop DEAS and collect migration data ---
+    migration_events = []
+    threshold_events = []
+    if deas_active:
+        try:
+            deas = getattr(ctrl, "_deas", None)
+            if deas is not None:
+                migration_events = deas.get_migration_history()
+            threshold_events = ctrl.collect_threshold_events()
+            ctrl.stop_deas()
+            event_bus.stop()
+            logger.info(
+                "DEAS stopped: %d migrations, %d threshold events",
+                len(migration_events), len(threshold_events),
+            )
+        except Exception as e:
+            logger.warning("Error stopping DEAS: %s", e)
 
     # --- Compute aggregated statistics ---
     successful = len(total_latencies)
@@ -338,6 +377,14 @@ def run_k8s_experiment(
         "inference_results": inference_results,
         "e2e_latencies_ms": [round(v, 4) for v in total_latencies],
     }
+
+    # Add DEAS data if enabled
+    if deas_active:
+        summary["deas_enabled"] = True
+        summary["deas_cooldown_s"] = deas_cooldown
+        summary["migration_events"] = migration_events
+        summary["threshold_events"] = threshold_events
+        summary["migration_count"] = len(migration_events)
 
     # --- Save results ---
     out_path = Path(output_dir)

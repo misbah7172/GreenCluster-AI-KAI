@@ -49,12 +49,26 @@ class DistributedGenerator:
         HuggingFace tokenizer.
     device : str
         Device for computation (``"cpu"`` or ``"cuda:0"``).
+    prefetch_engine : PrefetchEngine, optional
+        When provided, enables FlexGen-style CPU/disk offloading with
+        double-buffered prefetching.
+    weight_manager : TieredWeightManager, optional
+        Tiered weight manager used alongside the prefetch engine.
     """
 
-    def __init__(self, chunks, tokenizer, device: str = "cpu"):
+    def __init__(
+        self,
+        chunks,
+        tokenizer,
+        device: str = "cpu",
+        prefetch_engine=None,
+        weight_manager=None,
+    ):
         self.chunks = chunks
         self.tokenizer = tokenizer
         self.device = torch.device(device)
+        self._prefetch_engine = prefetch_engine
+        self._weight_manager = weight_manager
 
         # Move all chunks to device and set eval mode
         for chunk in self.chunks:
@@ -193,6 +207,36 @@ class DistributedGenerator:
         Intermediate chunks pass hidden states through.
         The last chunk (with lm_head) outputs logits.
 
+        When a :class:`PrefetchEngine` is configured, delegates to
+        :meth:`_forward_all_chunks_offloaded` which overlaps weight
+        transfers with computation.
+
+        Parameters
+        ----------
+        input_ids : torch.Tensor
+            Token IDs of shape ``(batch, seq_len)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Logits of shape ``(batch, seq_len, vocab_size)``.
+        """
+        if self._prefetch_engine is not None and self._weight_manager is not None:
+            return self._forward_all_chunks_offloaded(input_ids)
+
+        x = input_ids
+        with torch.no_grad():
+            for chunk in self.chunks:
+                x = chunk(x)
+        return x
+
+    def _forward_all_chunks_offloaded(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Forward pass with double-buffered prefetching.
+
+        For each chunk N, starts prefetching chunk N+1 weights from
+        RAM/disk into GPU while chunk N computes on the current input.
+        This hides the memory transfer latency behind GPU computation.
+
         Parameters
         ----------
         input_ids : torch.Tensor
@@ -204,9 +248,36 @@ class DistributedGenerator:
             Logits of shape ``(batch, seq_len, vocab_size)``.
         """
         x = input_ids
+        num_chunks = len(self.chunks)
+
         with torch.no_grad():
-            for chunk in self.chunks:
+            for i, chunk in enumerate(self.chunks):
+                # Start prefetching next chunk's weights while current chunk computes
+                if i + 1 < num_chunks:
+                    next_chunk = self.chunks[i + 1]
+                    # Use the first layer name of the next chunk as the prefetch key
+                    if hasattr(next_chunk, 'layer_names') and next_chunk.layer_names:
+                        next_layer_name = next_chunk.layer_names[0]
+                        self._prefetch_engine.prefetch_layer(next_layer_name)
+
+                # Forward through current chunk
                 x = chunk(x)
+
+                # If we prefetched, wait for it and apply weights to next chunk
+                if i + 1 < num_chunks:
+                    next_chunk = self.chunks[i + 1]
+                    if hasattr(next_chunk, 'layer_names') and next_chunk.layer_names:
+                        prefetched = self._prefetch_engine.wait_and_swap()
+                        if prefetched is not None:
+                            try:
+                                next_chunk.load_state_dict(prefetched, strict=False)
+                                next_chunk.to(self.device)
+                            except Exception as e:
+                                logger.warning(
+                                    "Failed to apply prefetched weights for chunk %d: %s",
+                                    i + 1, e,
+                                )
+
         return x
 
     @staticmethod

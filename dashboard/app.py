@@ -409,6 +409,73 @@ if has_k8s:
         st.caption(f"Average network overhead: {net_overhead:.2f} ms")
 
 # ---------------------------------------------------------------------------
+# Migration Energy Impact Panel (Phase 23)
+# ---------------------------------------------------------------------------
+
+if has_k8s:
+    migration_events = k8s_data.get("migration_events", [])
+    if migration_events:
+        st.header("Migration Energy Impact")
+
+        # Power timeline with migration annotations
+        node_metrics = k8s_data.get("node_metrics", [])
+        power_values = []
+        for node in node_metrics:
+            for s in node.get("gpu_samples", []):
+                power_values.append(s.get("power_w", 0.0))
+
+        if power_values:
+            power_df = pd.DataFrame({"GPU Power (W)": power_values})
+            st.line_chart(power_df)
+
+        # Migration event summary
+        st.subheader("Migration Events")
+        event_rows = []
+        for evt in migration_events:
+            event_rows.append({
+                "Chunk": evt.get("chunk_id", "N/A"),
+                "Source": evt.get("source_node", "N/A"),
+                "Target": evt.get("target_node", "N/A"),
+                "Duration (ms)": f"{evt.get('duration_ms', 0):.1f}",
+                "Reason": evt.get("reason", "N/A"),
+            })
+        if event_rows:
+            st.dataframe(pd.DataFrame(event_rows), hide_index=True)
+
+        total_migration_energy = k8s_data.get("total_migration_energy_wh", 0.0)
+        st.caption(
+            f"Total migration energy: {total_migration_energy:.6f} Wh "
+            f"across {len(migration_events)} migration(s)"
+        )
+
+# ---------------------------------------------------------------------------
+# VRAM vs RAM Execution Trade-off Panel (Phase 23)
+# ---------------------------------------------------------------------------
+
+if has_k8s:
+    offloading_stats = k8s_data.get("offloading_stats", {})
+    gpu_lats = offloading_stats.get("gpu_latencies_ms", [])
+    cpu_lats = offloading_stats.get("cpu_latencies_ms", [])
+
+    if gpu_lats and cpu_lats:
+        st.header("VRAM vs RAM Execution Trade-off")
+
+        num_chunks = min(len(gpu_lats), len(cpu_lats))
+        tradeoff_df = pd.DataFrame({
+            "GPU (VRAM)": gpu_lats[:num_chunks],
+            "CPU (RAM/Disk)": cpu_lats[:num_chunks],
+        }, index=[f"Chunk {i}" for i in range(num_chunks)])
+        st.bar_chart(tradeoff_df)
+
+        memory_saved = offloading_stats.get("memory_saved_mb", [])
+        if memory_saved:
+            total_saved = sum(memory_saved)
+            st.caption(
+                f"Total VRAM saved by offloading: {total_saved:.0f} MB "
+                f"across {num_chunks} chunks"
+            )
+
+# ---------------------------------------------------------------------------
 # Experiment Configuration
 # ---------------------------------------------------------------------------
 

@@ -32,6 +32,14 @@ class MetricsCollector:
         Set to False to skip GPU monitoring (e.g. when no NVIDIA GPU).
     enable_cpu : bool
         Set to False to skip CPU monitoring.
+    enable_threshold : bool
+        When True, creates an :class:`EventBus` and
+        :class:`PowerThresholdService` that classify GPU power draw
+        versus TDP in real time.
+    tdp_watts : float
+        GPU TDP in watts.  ``0`` means auto-detect from NVML.
+    node_name : str
+        Node identifier used in threshold events.
     """
 
     def __init__(
@@ -40,22 +48,50 @@ class MetricsCollector:
         interval: float = 1.0,
         enable_gpu: bool = True,
         enable_cpu: bool = True,
+        enable_threshold: bool = False,
+        tdp_watts: float = 0.0,
+        node_name: str = "local",
     ):
         self.enable_gpu = enable_gpu
         self.enable_cpu = enable_cpu
+        self._enable_threshold = enable_threshold
 
         self._gpu_monitor: Optional[GPUMonitor] = None
         self._cpu_monitor: Optional[CPUMonitor] = None
 
         if enable_gpu:
-            self._gpu_monitor = GPUMonitor(gpu_index=gpu_index, interval=interval)
+            self._gpu_monitor = GPUMonitor(
+                gpu_index=gpu_index,
+                interval=interval,
+                tdp_watts=tdp_watts,
+            )
         if enable_cpu:
             self._cpu_monitor = CPUMonitor(interval=interval)
+
+        # Threshold / event bus (Phase 20)
+        self._event_bus = None
+        self._threshold_service = None
+        if enable_threshold and self._gpu_monitor is not None:
+            from monitoring.event_bus import EventBus
+            from monitoring.threshold_service import PowerThresholdService
+
+            self._event_bus = EventBus()
+            self._threshold_service = PowerThresholdService(
+                gpu_monitor=self._gpu_monitor,
+                event_bus=self._event_bus,
+                node_name=node_name,
+                tdp_watts=tdp_watts,
+            )
 
         # Inference-level measurements
         self._inference_latencies: List[float] = []   # milliseconds
         self._start_time: Optional[float] = None
         self._end_time: Optional[float] = None
+
+    @property
+    def event_bus(self):
+        """The :class:`EventBus` instance, or ``None`` if thresholds are disabled."""
+        return self._event_bus
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -68,11 +104,19 @@ class MetricsCollector:
             self._gpu_monitor.start()
         if self._cpu_monitor:
             self._cpu_monitor.start()
+        if self._event_bus:
+            self._event_bus.start()
+        if self._threshold_service:
+            self._threshold_service.start()
         logger.info("MetricsCollector started")
 
     def stop(self) -> None:
         """Stop all monitors and record the experiment end time."""
         self._end_time = time.perf_counter()
+        if self._threshold_service:
+            self._threshold_service.stop()
+        if self._event_bus:
+            self._event_bus.stop()
         if self._gpu_monitor:
             self._gpu_monitor.stop()
         if self._cpu_monitor:
@@ -108,6 +152,33 @@ class MetricsCollector:
     # Computed summary
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _compute_energy_trapezoidal(gpu_samples: List[Dict[str, Any]]) -> float:
+        """Trapezoidal integration of power samples.
+
+        Returns total energy in Wh.  Requires at least 2 samples with
+        ISO-8601 timestamps and ``power_w`` values.  Returns 0.0 when
+        fewer than 2 samples are available.
+        """
+        if len(gpu_samples) < 2:
+            return 0.0
+
+        total_ws = 0.0  # watt-seconds
+        for i in range(1, len(gpu_samples)):
+            try:
+                t0 = datetime.fromisoformat(gpu_samples[i - 1]["timestamp"])
+                t1 = datetime.fromisoformat(gpu_samples[i]["timestamp"])
+                dt_s = (t1 - t0).total_seconds()
+                if dt_s <= 0:
+                    continue
+                p0 = gpu_samples[i - 1]["power_w"]
+                p1 = gpu_samples[i]["power_w"]
+                total_ws += (p0 + p1) / 2.0 * dt_s
+            except (KeyError, ValueError, TypeError):
+                continue
+
+        return total_ws / 3600.0
+
     def compute_summary(self, execution_mode: str = "local") -> Dict[str, Any]:
         """Compute aggregate metrics from the collected data.
 
@@ -137,8 +208,11 @@ class MetricsCollector:
             avg_mem_used_mb = sum(s["memory_used_mb"] for s in gpu_samples) / len(gpu_samples)
             avg_temp_c = sum(s["temperature_c"] for s in gpu_samples) / len(gpu_samples)
 
-        # Total energy: average_power_W * runtime_s / 3600 = Wh
-        total_energy_wh = avg_power_w * total_runtime_s / 3600.0
+        # Total energy via trapezoidal integration (more accurate) or
+        # fallback to avg_power * time when fewer than 2 samples.
+        total_energy_wh = self._compute_energy_trapezoidal(gpu_samples)
+        if total_energy_wh == 0.0 and avg_power_w > 0 and total_runtime_s > 0:
+            total_energy_wh = avg_power_w * total_runtime_s / 3600.0
 
         # --- CPU aggregates ---
         cpu_samples = self.get_cpu_samples()
@@ -158,6 +232,11 @@ class MetricsCollector:
             throughput = num_inferences / total_runtime_s
         if num_inferences > 0:
             energy_per_inference_wh = total_energy_wh / num_inferences
+
+        # Energy-Efficiency Ratio (EER) = throughput / avg_power
+        eer = 0.0
+        if avg_power_w > 0 and throughput > 0:
+            eer = throughput / avg_power_w
 
         summary: Dict[str, Any] = {
             "execution_mode": execution_mode,
@@ -179,6 +258,7 @@ class MetricsCollector:
             # Inference
             "avg_latency_ms": round(avg_latency_ms, 4),
             "throughput_inferences_per_sec": round(throughput, 4),
+            "energy_efficiency_ratio": round(eer, 6),
 
             # Raw data for downstream analysis
             "gpu_samples": gpu_samples,

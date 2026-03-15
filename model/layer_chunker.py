@@ -342,6 +342,60 @@ class LayerChunker:
         logger.info("Loaded chunk %d weights from %s", chunk.chunk_id, path)
         return chunk
 
+    def create_offloaded_chunks(
+        self,
+        gpu_budget_mb: float,
+        ram_budget_mb: float,
+        disk_dir: str = "/tmp/kai_swap",
+        device: str = "cuda:0",
+    ):
+        """Create chunks with FlexGen-style tiered offloading.
+
+        Layers that do not fit in GPU VRAM are placed in System RAM or
+        on disk.  Returns chunks plus the weight manager and prefetch
+        engine needed for offloaded forward passes.
+
+        Parameters
+        ----------
+        gpu_budget_mb : float
+            VRAM budget for model weights.
+        ram_budget_mb : float
+            System RAM budget for weight caching.
+        disk_dir : str
+            Directory for disk-swapped safetensors files.
+        device : str
+            GPU device string.
+
+        Returns
+        -------
+        tuple[list[LayerChunk], TieredWeightManager, PrefetchEngine]
+        """
+        from model.tiered_weight_manager import TieredWeightManager
+        from model.prefetch_engine import PrefetchEngine
+
+        # Create a single-chunk list (all layers) for offloaded execution
+        chunks = self.create_chunks(1)
+
+        # Estimate per-layer memory
+        layers = self._get_layers()
+        layer_sizes = []
+        for name, module in layers:
+            params = sum(p.numel() * p.element_size() for p in module.parameters())
+            size_mb = params * 1.2 / (1024 * 1024)  # 20% overhead
+            layer_sizes.append((name, size_mb))
+
+        manager = TieredWeightManager(
+            gpu_budget_mb=gpu_budget_mb,
+            ram_budget_mb=ram_budget_mb,
+            disk_dir=disk_dir,
+            device=device,
+        )
+        manager.plan_placement(layer_sizes)
+
+        engine = PrefetchEngine(weight_manager=manager, device=device)
+
+        return chunks, manager, engine
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

@@ -143,6 +143,58 @@ curl -X POST http://192.168.1.100:30080/infer \
 
 # Check cluster health:
 curl http://192.168.1.100:30080/health
+
+# View the current chunk topology:
+curl http://192.168.1.100:30080/topology
+```
+
+---
+
+## Step 7: Enable Energy-Aware Features (Optional)
+
+### High-Frequency Sampling
+
+For detailed power analysis, enable sub-second GPU monitoring:
+
+```bash
+# Deploy monitors with 100ms sampling and power threshold alerts:
+python -m kubernetes.controller deploy_monitor \
+  --sampling-rate 0.1 \
+  --enable-threshold \
+  --tdp-watts 0   # 0 = auto-detect from GPU
+
+# Query current power threshold status:
+curl http://<monitor-ip>:9090/metrics/threshold
+
+# View recent threshold events:
+curl http://<monitor-ip>:9090/metrics/events?n=50
+```
+
+### Dynamic Energy-Aware Scheduling (DEAS)
+
+DEAS automatically migrates model chunks away from overheating nodes:
+
+```bash
+# Run benchmark with DEAS enabled:
+python kai_cli.py benchmark --hf-model sshleifer/tiny-gpt2 --mode kubernetes \
+  --sampling-rate 0.1 --enable-deas --deas-cooldown 30.0
+```
+
+When DEAS detects a node drawing >= 80% of its GPU TDP, it:
+1. **Pauses** the chunk on the hot node
+2. **Checkpoints** weights + hidden state to disk
+3. **Migrates** the checkpoint to a cooler node
+4. **Relinks** the gateway to point at the new node
+5. **Resumes** inference on the new node
+
+### CPU/Disk Offloading
+
+For models that exceed your cluster's total GPU VRAM:
+
+```bash
+# Run with offloading — weights spill to RAM and disk:
+python kai_cli.py run --model microsoft/phi-2 --prompt "Hello" --max-tokens 50 \
+  --offload --gpu-budget-mb 3000 --disk-swap-dir /tmp/kai_swap
 ```
 
 ---
@@ -153,10 +205,14 @@ curl http://192.168.1.100:30080/health
 Your Desktop (192.168.1.100)          Friend's Laptop (192.168.1.105)
 +---------------------------+        +----------------------------+
 |  Gateway (:30080)         |        |                            |
-|    |                      |        |                            |
+|    |   /topology          |        |                            |
+|    |   /relink            |        |                            |
 |  Chunk-0 (:50051)        |--gRPC->|  Chunk-1 (:50051)          |
 |  [Layers 0-15]           |        |  [Layers 16-31]            |
 |  [embed, transformer]    |<-gRPC--|  [transformer, lm_head]    |
+|                           |        |                            |
+|  Monitor (:9090)         |        |  Monitor (:9090)           |
+|  [Power thresholds]      |        |  [Power thresholds]        |
 +---------------------------+        +----------------------------+
        ~60W                                  ~60W
                     Total: ~120W
@@ -182,7 +238,11 @@ Your Desktop (192.168.1.100)          Friend's Laptop (192.168.1.105)
 | Chunk Servers | gRPC | 50051 | Internal (ClusterIP) | Model layer inference |
 | Gateway | HTTP | 8080 | Internal | Inference endpoint |
 | Gateway (external) | HTTP | 30080 | NodePort (external) | User-facing access |
+| Gateway /topology | HTTP | 30080 | NodePort (external) | Chunk-to-host mapping |
+| Gateway /relink | HTTP | 30080 | NodePort (external) | Live chunk migration |
 | Monitor | HTTP | 9090 | Internal | GPU/CPU metrics |
+| Monitor /metrics/threshold | HTTP | 9090 | Internal | Power threshold status |
+| Monitor /metrics/events | HTTP | 9090 | Internal | Threshold event history |
 | K8s API | HTTPS | 6443 | Control plane | Cluster management |
 
 ---

@@ -318,9 +318,9 @@ class TestCLI:
         """Scan command runs without error."""
         import subprocess, sys
         result = subprocess.run(
-            [sys.executable, "kai_cli.py", "scan", "--mode", "local"],
-            capture_output=True, text=True, cwd=r"C:\CODE\KAI",
-            env={**__import__("os").environ, "PYTHONPATH": r"C:\CODE\KAI"},
+            [sys.executable, "-u", "kai_cli.py", "scan", "--mode", "local"],
+            capture_output=True, text=True, cwd=r"D:\CODE\KAI",
+            env={**__import__("os").environ, "PYTHONPATH": r"D:\CODE\KAI"},
             timeout=30,
         )
         assert result.returncode == 0
@@ -330,10 +330,10 @@ class TestCLI:
         """Partition preview command runs without error."""
         import subprocess, sys
         result = subprocess.run(
-            [sys.executable, "kai_cli.py", "partition",
+            [sys.executable, "-u", "kai_cli.py", "partition",
              "--model", MODEL_NAME, "--num-nodes", "2"],
-            capture_output=True, text=True, cwd=r"C:\CODE\KAI",
-            env={**__import__("os").environ, "PYTHONPATH": r"C:\CODE\KAI"},
+            capture_output=True, text=True, cwd=r"D:\CODE\KAI",
+            env={**__import__("os").environ, "PYTHONPATH": r"D:\CODE\KAI"},
             timeout=60,
         )
         assert result.returncode == 0

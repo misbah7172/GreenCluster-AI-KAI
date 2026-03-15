@@ -27,6 +27,7 @@ import csv
 import json
 import logging
 import statistics
+from datetime import datetime as _dt
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -210,6 +211,172 @@ class ExperimentAnalyzer:
             "performance_per_watt": round(perf_per_watt, 6),
 
             "per_chunk_avg_latency_ms": d.get("per_chunk_avg_latency_ms", []),
+
+            "migration_count": len(d.get("migration_events", [])),
+            "cluster_eer": d.get("energy_efficiency_ratio", 0.0),
+        }
+
+    # ------------------------------------------------------------------
+    # DEAS / migration helpers
+    # ------------------------------------------------------------------
+
+    def compute_migration_energy(
+        self,
+        power_samples: List[Dict[str, Any]],
+        migration_start_ts: str,
+        migration_end_ts: str,
+    ) -> Dict[str, float]:
+        """Compute energy consumed during a single migration event.
+
+        Uses trapezoidal integration over GPU power samples that fall
+        within the *[migration_start_ts, migration_end_ts]* window.
+
+        Parameters
+        ----------
+        power_samples : list[dict]
+            Each element must contain ``"timestamp"`` (ISO-8601 string)
+            and ``"power_w"`` (float, watts).
+        migration_start_ts, migration_end_ts : str
+            ISO-8601 timestamps delimiting the migration window.
+
+        Returns
+        -------
+        dict
+            ``migration_energy_wh`` -- energy in watt-hours,
+            ``migration_duration_s`` -- wall-clock seconds,
+            ``avg_migration_power_w`` -- mean power during migration.
+        """
+        start = _dt.fromisoformat(migration_start_ts)
+        end = _dt.fromisoformat(migration_end_ts)
+
+        # Filter and sort samples within the migration window
+        window = sorted(
+            (
+                (_dt.fromisoformat(s["timestamp"]), s["power_w"])
+                for s in power_samples
+                if start <= _dt.fromisoformat(s["timestamp"]) <= end
+            ),
+            key=lambda x: x[0],
+        )
+
+        migration_duration_s = (end - start).total_seconds()
+
+        if len(window) < 2:
+            # Not enough samples for integration
+            avg_power = window[0][1] if window else 0.0
+            energy_wh = avg_power * (migration_duration_s / 3600.0)
+            return {
+                "migration_energy_wh": round(energy_wh, 8),
+                "migration_duration_s": round(migration_duration_s, 4),
+                "avg_migration_power_w": round(avg_power, 4),
+            }
+
+        # Trapezoidal integration  (energy in watt-seconds, then -> Wh)
+        energy_ws = 0.0
+        for i in range(1, len(window)):
+            dt_s = (window[i][0] - window[i - 1][0]).total_seconds()
+            avg_p = (window[i][1] + window[i - 1][1]) / 2.0
+            energy_ws += avg_p * dt_s
+
+        energy_wh = energy_ws / 3600.0
+        avg_power = energy_ws / migration_duration_s if migration_duration_s > 0 else 0.0
+
+        return {
+            "migration_energy_wh": round(energy_wh, 8),
+            "migration_duration_s": round(migration_duration_s, 4),
+            "avg_migration_power_w": round(avg_power, 4),
+        }
+
+    def compute_offloading_overhead(
+        self,
+        baseline_latencies: List[float],
+        offloaded_latencies: List[float],
+    ) -> Dict[str, float]:
+        """Compare baseline vs offloaded inference latencies.
+
+        Parameters
+        ----------
+        baseline_latencies : list[float]
+            Latencies (ms) measured without offloading.
+        offloaded_latencies : list[float]
+            Latencies (ms) measured with offloading enabled.
+
+        Returns
+        -------
+        dict
+            ``baseline_avg_ms``, ``offloaded_avg_ms``,
+            ``overhead_delta_ms`` (offloaded - baseline),
+            ``overhead_pct`` (delta / baseline * 100).
+        """
+        baseline_avg = (
+            statistics.mean(baseline_latencies) if baseline_latencies else 0.0
+        )
+        offloaded_avg = (
+            statistics.mean(offloaded_latencies) if offloaded_latencies else 0.0
+        )
+        delta = offloaded_avg - baseline_avg
+        pct = (delta / baseline_avg * 100.0) if baseline_avg > 0 else 0.0
+
+        return {
+            "baseline_avg_ms": round(baseline_avg, 4),
+            "offloaded_avg_ms": round(offloaded_avg, 4),
+            "overhead_delta_ms": round(delta, 4),
+            "overhead_pct": round(pct, 4),
+        }
+
+    def analyse_deas(self) -> Dict[str, Any]:
+        """Analyse Dynamic Energy-Aware Scheduling (DEAS) metrics.
+
+        Reads ``migration_events`` from the loaded Kubernetes data and
+        computes per-migration energy via :meth:`compute_migration_energy`.
+
+        Returns
+        -------
+        dict
+            ``migration_count`` -- number of migration events,
+            ``total_migration_energy_wh`` -- summed migration energy,
+            ``avg_energy_recovery_s`` -- mean recovery time after
+            migrations, ``cluster_eer`` -- cluster energy-efficiency
+            ratio from the K8s data.
+
+        Raises
+        ------
+        ValueError
+            If no K8s results have been loaded.
+        """
+        if self._k8s is None:
+            raise ValueError("No K8s results loaded")
+
+        migration_events = self._k8s.get("migration_events", [])
+        cluster_eer = self._k8s.get("energy_efficiency_ratio", 0.0)
+
+        total_energy_wh = 0.0
+        recovery_times: List[float] = []
+
+        for event in migration_events:
+            start_ts = event.get("start_ts")
+            end_ts = event.get("end_ts")
+            gpu_samples = event.get("gpu_power_samples", [])
+
+            if start_ts and end_ts and gpu_samples:
+                result = self.compute_migration_energy(
+                    gpu_samples, start_ts, end_ts,
+                )
+                total_energy_wh += result["migration_energy_wh"]
+
+            recovery_s = event.get("energy_recovery_s")
+            if recovery_s is not None:
+                recovery_times.append(float(recovery_s))
+
+        avg_recovery = (
+            statistics.mean(recovery_times) if recovery_times else 0.0
+        )
+
+        return {
+            "migration_count": len(migration_events),
+            "total_migration_energy_wh": round(total_energy_wh, 8),
+            "avg_energy_recovery_s": round(avg_recovery, 4),
+            "cluster_eer": round(cluster_eer, 6),
         }
 
     # ------------------------------------------------------------------

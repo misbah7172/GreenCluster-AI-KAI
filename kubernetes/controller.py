@@ -296,7 +296,12 @@ def _build_gateway_service() -> client.V1Service:
     )
 
 
-def _build_monitor_daemonset(image: str = MONITOR_IMAGE) -> dict:
+def _build_monitor_daemonset(
+    image: str = MONITOR_IMAGE,
+    sampling_rate: float = 1.0,
+    tdp_watts: float = 0.0,
+    enable_threshold: bool = False,
+) -> dict:
     """Build the monitor DaemonSet as a raw dict.
 
     The kubernetes Python client does not have a first-class DaemonSet model
@@ -324,8 +329,10 @@ def _build_monitor_daemonset(image: str = MONITOR_IMAGE) -> dict:
                         "env": [
                             {"name": "MONITOR_PORT", "value": str(MONITOR_PORT)},
                             {"name": "GPU_INDEX", "value": "0"},
-                            {"name": "SAMPLE_INTERVAL", "value": "1.0"},
+                            {"name": "SAMPLING_RATE", "value": str(sampling_rate)},
                             {"name": "ENABLE_GPU", "value": "true"},
+                            {"name": "TDP_WATTS", "value": str(tdp_watts)},
+                            {"name": "ENABLE_THRESHOLD", "value": str(enable_threshold).lower()},
                         ],
                         "resources": {
                             "requests": {
@@ -479,13 +486,25 @@ class KAIController:
         self.apps_v1.create_namespaced_deployment(self.namespace, dep)
         logger.info("Created Deployment kai-gateway")
 
-    def deploy_monitor(self, image: str = MONITOR_IMAGE) -> None:
+    def deploy_monitor(
+        self,
+        image: str = MONITOR_IMAGE,
+        sampling_rate: float = 1.0,
+        tdp_watts: float = 0.0,
+        enable_threshold: bool = False,
+    ) -> None:
         """Create the monitor DaemonSet and Service.
 
         Parameters
         ----------
         image : str
             Docker image for the monitor service.
+        sampling_rate : float
+            GPU sampling interval in seconds (default 1.0).
+        tdp_watts : float
+            GPU TDP in watts (0 = auto-detect).
+        enable_threshold : bool
+            Enable the power threshold service on each monitor pod.
         """
         _ensure_namespace(self.core_v1)
 
@@ -499,7 +518,12 @@ class KAIController:
         self.core_v1.create_namespaced_service(self.namespace, svc)
         logger.info("Created Service kai-monitor")
 
-        ds_body = _build_monitor_daemonset(image)
+        ds_body = _build_monitor_daemonset(
+            image,
+            sampling_rate=sampling_rate,
+            tdp_watts=tdp_watts,
+            enable_threshold=enable_threshold,
+        )
         self.apps_v1.create_namespaced_daemon_set(self.namespace, ds_body)
         logger.info("Created DaemonSet kai-monitor")
 
@@ -738,6 +762,201 @@ class KAIController:
                 })
 
         return results
+
+    def collect_threshold_events(self) -> List[Dict[str, Any]]:
+        """Gather threshold events from all monitor pods.
+
+        Queries each monitor pod's ``/metrics/events`` endpoint.
+
+        Returns
+        -------
+        list[dict]
+            Combined list of threshold events from all pods.
+        """
+        pods = self.core_v1.list_namespaced_pod(
+            self.namespace,
+            label_selector="app=kai,component=monitor",
+        )
+
+        all_events: List[Dict[str, Any]] = []
+        for pod in pods.items:
+            pod_ip = pod.status.pod_ip
+            pod_name = pod.metadata.name
+            if not pod_ip:
+                continue
+            try:
+                req = urllib.request.Request(
+                    f"http://{pod_ip}:{MONITOR_PORT}/metrics/events?n=100"
+                )
+                resp = urllib.request.urlopen(req, timeout=10)
+                data = json.loads(resp.read().decode())
+                events = data.get("events", [])
+                for ev in events:
+                    ev["pod_name"] = pod_name
+                all_events.extend(events)
+            except (urllib.error.URLError, TimeoutError) as e:
+                logger.warning(
+                    "Failed to collect threshold events from %s: %s", pod_name, e,
+                )
+
+        return all_events
+
+    # ------------------------------------------------------------------
+    # DEAS (Dynamic Energy-Aware Scheduling)
+    # ------------------------------------------------------------------
+
+    def start_deas(
+        self,
+        event_bus,
+        auto_partitioner,
+        cooldown_s: float = 30.0,
+    ) -> None:
+        """Create and start the DEAS scheduler.
+
+        Parameters
+        ----------
+        event_bus : EventBus
+            Event bus from the monitoring layer.
+        auto_partitioner : AutoPartitioner
+            Partitioner for recalculation on rebalance.
+        cooldown_s : float
+            Minimum seconds between migration attempts.
+        """
+        from model.deas_scheduler import DEASScheduler
+
+        self._deas = DEASScheduler(
+            event_bus=event_bus,
+            auto_partitioner=auto_partitioner,
+            controller=self,
+            cooldown_s=cooldown_s,
+        )
+        self._deas.start()
+        logger.info("DEAS scheduler started (cooldown=%.1fs)", cooldown_s)
+
+    def stop_deas(self) -> None:
+        """Stop the DEAS scheduler if running."""
+        deas = getattr(self, "_deas", None)
+        if deas is not None:
+            deas.stop()
+            self._deas = None
+            logger.info("DEAS scheduler stopped")
+
+    def get_node_energy_profiles(self) -> List[Dict[str, Any]]:
+        """Query all monitor pods and build per-node energy profiles.
+
+        Returns
+        -------
+        list[dict]
+            One profile dict per node with ``node_name``, ``avg_power_w``,
+            ``throughput``, ``eer``, ``current_chunks``,
+            ``threshold_level``, and ``usable_memory_mb`` keys.
+        """
+        metrics = self.collect_metrics()
+        profiles: List[Dict[str, Any]] = []
+
+        # Build chunk-to-node mapping
+        chunk_pods = self.core_v1.list_namespaced_pod(
+            self.namespace,
+            label_selector="app=kai,component=chunk",
+        )
+        node_chunks: Dict[str, List[int]] = {}
+        for pod in chunk_pods.items:
+            node = pod.spec.node_name or "unknown"
+            chunk_id_str = pod.metadata.labels.get("chunk-id", "-1")
+            node_chunks.setdefault(node, []).append(int(chunk_id_str))
+
+        for m in metrics:
+            if "error" in m:
+                continue
+            node = m.get("node_name", "unknown")
+            avg_power = m.get("avg_power_w", 0.0)
+            throughput = m.get("throughput_inf_per_sec", 0.0)
+            eer = throughput / avg_power if avg_power > 0 else 0.0
+
+            # Determine threshold level from latest data
+            tdp_pct = m.get("tdp_pct", 0.0)
+            if tdp_pct >= 80.0:
+                level = "critical"
+            elif tdp_pct >= 70.0:
+                level = "warning"
+            else:
+                level = "optimal"
+
+            profiles.append({
+                "node_name": node,
+                "avg_power_w": avg_power,
+                "throughput": throughput,
+                "eer": round(eer, 6),
+                "current_chunks": node_chunks.get(node, []),
+                "threshold_level": level,
+                "usable_memory_mb": m.get("usable_memory_mb", 0.0),
+            })
+
+        return profiles
+
+    def trigger_rebalance(self) -> Dict[str, Any]:
+        """Manually trigger a DEAS rebalance evaluation.
+
+        Returns
+        -------
+        dict
+            Result with ``rebalanced`` flag, ``profiles``, and
+            ``migration_plans`` if applicable.
+        """
+        from model.deas_scheduler import NodeEnergyProfile
+
+        raw_profiles = self.get_node_energy_profiles()
+
+        # Convert to NodeEnergyProfile objects for the scheduler
+        profiles = [
+            NodeEnergyProfile(
+                node_name=p["node_name"],
+                avg_power_w=p["avg_power_w"],
+                throughput_inf_per_sec=p["throughput"],
+                eer=p["eer"],
+                current_chunks=p["current_chunks"],
+                threshold_level=p["threshold_level"],
+                usable_memory_mb=p["usable_memory_mb"],
+            )
+            for p in raw_profiles
+        ]
+
+        deas = getattr(self, "_deas", None)
+        if deas is None:
+            return {
+                "rebalanced": False,
+                "reason": "DEAS not started",
+                "profiles": raw_profiles,
+            }
+
+        should = deas.should_rebalance(profiles)
+        if not should:
+            return {
+                "rebalanced": False,
+                "reason": "no_critical_nodes",
+                "profiles": raw_profiles,
+            }
+
+        plans = deas.plan_migration(profiles)
+        results = []
+        for plan in plans:
+            ok = deas.execute_migration(plan)
+            results.append({
+                "chunk_id": plan.chunk_id,
+                "source": plan.source_node,
+                "target": plan.target_node,
+                "success": ok,
+            })
+
+        return {
+            "rebalanced": True,
+            "profiles": raw_profiles,
+            "migration_plans": results,
+        }
+
+    # ------------------------------------------------------------------
+    # Monitoring helpers
+    # ------------------------------------------------------------------
 
     def start_monitoring(self) -> None:
         """Send POST /start to all monitor pods to begin recording."""

@@ -360,6 +360,138 @@ def plot_per_chunk_latency(
 
 
 # ---------------------------------------------------------------------------
+# 9. Migration energy impact (Phase 23)
+# ---------------------------------------------------------------------------
+
+def plot_migration_energy_impact(
+    analyzer: ExperimentAnalyzer,
+    output_dir: str,
+) -> Optional[str]:
+    """Line chart of power over time with migration windows highlighted.
+
+    Draws vertical lines at migration start/end timestamps and shades the
+    area between them to visualize migration energy cost.
+    """
+    k8s_data = analyzer.k8s_data
+    if k8s_data is None:
+        logger.warning("No K8s data for migration energy plot")
+        return None
+
+    migration_events = k8s_data.get("migration_events", [])
+    if not migration_events:
+        logger.warning("No migration events for migration energy plot")
+        return None
+
+    # Collect power samples from node metrics
+    node_metrics = k8s_data.get("node_metrics", [])
+    all_powers = []
+    all_timestamps = []
+    for node in node_metrics:
+        for s in node.get("gpu_samples", []):
+            all_powers.append(s.get("power_w", 0.0))
+            all_timestamps.append(s.get("timestamp", ""))
+
+    if not all_powers:
+        logger.warning("No GPU power samples for migration energy plot")
+        return None
+
+    fig, ax = plt.subplots(figsize=_FIG_SIZE)
+
+    sample_indices = list(range(len(all_powers)))
+    ax.plot(sample_indices, all_powers, color="#2196F3", linewidth=1.5, label="GPU Power")
+
+    # Mark migration windows
+    num_samples = len(all_powers)
+    for i, event in enumerate(migration_events):
+        # Use fractional positions if timestamps aren't available
+        start_pct = event.get("start_pct", i * 0.2)
+        end_pct = event.get("end_pct", start_pct + 0.05)
+        start_idx = int(start_pct * num_samples)
+        end_idx = int(end_pct * num_samples)
+        start_idx = max(0, min(start_idx, num_samples - 1))
+        end_idx = max(start_idx + 1, min(end_idx, num_samples))
+
+        ax.axvline(x=start_idx, color="#FF5722", linestyle="--", alpha=0.7)
+        ax.axvline(x=end_idx, color="#FF5722", linestyle="--", alpha=0.7)
+        ax.axvspan(start_idx, end_idx, alpha=0.2, color="#FF5722",
+                   label="Migration" if i == 0 else None)
+
+    ax.set_xlabel("Sample Index")
+    ax.set_ylabel("GPU Power (W)")
+    ax.set_title("Migration Energy Impact")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    path = str(Path(output_dir) / "migration_energy_impact.png")
+    _save(fig, path)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# 10. VRAM vs RAM execution tradeoff (Phase 23)
+# ---------------------------------------------------------------------------
+
+def plot_vram_ram_tradeoff(
+    analyzer: ExperimentAnalyzer,
+    output_dir: str,
+) -> Optional[str]:
+    """Grouped bar chart comparing per-chunk latency on GPU vs CPU.
+
+    Annotates each group with memory saved by offloading to RAM/disk.
+    """
+    k8s_data = analyzer.k8s_data
+    if k8s_data is None:
+        logger.warning("No K8s data for VRAM/RAM tradeoff plot")
+        return None
+
+    offloading_stats = k8s_data.get("offloading_stats", {})
+    gpu_latencies = offloading_stats.get("gpu_latencies_ms", [])
+    cpu_latencies = offloading_stats.get("cpu_latencies_ms", [])
+    memory_saved_mb = offloading_stats.get("memory_saved_mb", [])
+
+    if not gpu_latencies or not cpu_latencies:
+        logger.warning("No offloading latency data for VRAM/RAM tradeoff plot")
+        return None
+
+    num_chunks = min(len(gpu_latencies), len(cpu_latencies))
+    if num_chunks == 0:
+        return None
+
+    fig, ax = plt.subplots(figsize=_FIG_SIZE)
+
+    x = np.arange(num_chunks)
+    width = 0.35
+
+    bars_gpu = ax.bar(x - width / 2, gpu_latencies[:num_chunks], width,
+                      label="GPU (VRAM)", color="#4CAF50", edgecolor="black", linewidth=0.5)
+    bars_cpu = ax.bar(x + width / 2, cpu_latencies[:num_chunks], width,
+                      label="CPU (RAM/Disk)", color="#FF9800", edgecolor="black", linewidth=0.5)
+
+    # Annotate with memory saved
+    if memory_saved_mb:
+        for i in range(min(num_chunks, len(memory_saved_mb))):
+            saved = memory_saved_mb[i]
+            ax.annotate(
+                f"-{saved:.0f} MB",
+                xy=(x[i] + width / 2, cpu_latencies[i]),
+                xytext=(0, 8), textcoords="offset points",
+                ha="center", fontsize=8, color="#E65100",
+            )
+
+    ax.set_xlabel("Model Chunk")
+    ax.set_ylabel("Execution Time (ms)")
+    ax.set_title("VRAM vs RAM/Disk Execution Trade-off")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"Chunk {i}" for i in range(num_chunks)])
+    ax.legend()
+    ax.grid(True, axis="y", alpha=0.3)
+
+    path = str(Path(output_dir) / "vram_ram_tradeoff.png")
+    _save(fig, path)
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Master plot function
 # ---------------------------------------------------------------------------
 
@@ -412,6 +544,14 @@ def plot_all(
     # K8s-specific
     if has_k8s:
         p = plot_per_chunk_latency(analyzer, output_dir)
+        if p:
+            generated.append(p)
+
+        # Phase 23 plots — require K8s data with migration/offloading info
+        p = plot_migration_energy_impact(analyzer, output_dir)
+        if p:
+            generated.append(p)
+        p = plot_vram_ram_tradeoff(analyzer, output_dir)
         if p:
             generated.append(p)
 

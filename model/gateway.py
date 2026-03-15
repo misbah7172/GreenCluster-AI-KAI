@@ -24,10 +24,12 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import List
+from typing import Dict, List, Optional
+from urllib.parse import urlparse, parse_qs
 
 import torch
 import grpc
@@ -69,12 +71,15 @@ class InferenceGateway:
         chunk_hosts : list[str]
             Ordered list of ``host:port`` strings for each chunk service.
         """
-        self.chunk_hosts = chunk_hosts
+        self.chunk_hosts = list(chunk_hosts)
         self.stubs = []
+        self._channels = []
+        self._chain_lock = threading.Lock()
 
         for host in chunk_hosts:
             channel = grpc.insecure_channel(host, options=_GRPC_OPTIONS)
             stub = inference_pb2_grpc.InferenceServiceStub(channel)
+            self._channels.append(channel)
             self.stubs.append(stub)
             logger.info("Connected to chunk at %s", host)
 
@@ -122,25 +127,26 @@ class InferenceGateway:
         chunk_times = []
         total_start = time.perf_counter()
 
-        for i, stub in enumerate(self.stubs):
-            tensor_bytes = _serialize_tensor(current_tensor)
+        with self._chain_lock:
+            for i, stub in enumerate(self.stubs):
+                tensor_bytes = _serialize_tensor(current_tensor)
 
-            req = inference_pb2.InferRequest(
-                tensor_data=tensor_bytes,
-                chunk_id=i,
-                request_id=request_id,
-                tensor_shape=list(current_tensor.shape),
-                tensor_dtype=str(current_tensor.dtype).replace("torch.", ""),
-            )
+                req = inference_pb2.InferRequest(
+                    tensor_data=tensor_bytes,
+                    chunk_id=i,
+                    request_id=request_id,
+                    tensor_shape=list(current_tensor.shape),
+                    tensor_dtype=str(current_tensor.dtype).replace("torch.", ""),
+                )
 
-            resp = stub.Infer(req)
-            current_tensor = _deserialize_tensor(resp.tensor_data)
-            chunk_times.append(resp.inference_time_ms)
+                resp = stub.Infer(req)
+                current_tensor = _deserialize_tensor(resp.tensor_data)
+                chunk_times.append(resp.inference_time_ms)
 
-            logger.debug(
-                "Chunk %d: %.2f ms, output shape %s",
-                i, resp.inference_time_ms, list(current_tensor.shape),
-            )
+                logger.debug(
+                    "Chunk %d: %.2f ms, output shape %s",
+                    i, resp.inference_time_ms, list(current_tensor.shape),
+                )
 
         total_ms = (time.perf_counter() - total_start) * 1000.0
 
@@ -151,6 +157,51 @@ class InferenceGateway:
             "network_overhead_ms": total_ms - sum(chunk_times),
             "request_id": request_id,
         }
+
+    def update_chunk_host(self, chunk_index: int, new_host: str) -> None:
+        """Replace the gRPC stub for a specific chunk index.
+
+        Used during live migration to point at the new node.
+        Thread-safe: acquires the chain lock to prevent mid-inference rewiring.
+
+        Parameters
+        ----------
+        chunk_index : int
+            Index of the chunk to re-link (0-based).
+        new_host : str
+            New ``host:port`` address for the chunk service.
+        """
+        with self._chain_lock:
+            if chunk_index < 0 or chunk_index >= len(self.stubs):
+                raise IndexError(
+                    f"chunk_index {chunk_index} out of range [0, {len(self.stubs)})"
+                )
+
+            old_host = self.chunk_hosts[chunk_index]
+            # Close old channel
+            try:
+                self._channels[chunk_index].close()
+            except Exception:
+                pass
+
+            # Create new connection
+            channel = grpc.insecure_channel(new_host, options=_GRPC_OPTIONS)
+            stub = inference_pb2_grpc.InferenceServiceStub(channel)
+            self._channels[chunk_index] = channel
+            self.stubs[chunk_index] = stub
+            self.chunk_hosts[chunk_index] = new_host
+
+            logger.info(
+                "Relinked chunk %d: %s → %s", chunk_index, old_host, new_host,
+            )
+
+    def get_chain_topology(self) -> List[Dict[str, str]]:
+        """Return current chunk → host mapping."""
+        with self._chain_lock:
+            return [
+                {"chunk_index": i, "host": host}
+                for i, host in enumerate(self.chunk_hosts)
+            ]
 
 
 class GatewayHTTPHandler(BaseHTTPRequestHandler):
@@ -167,19 +218,26 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
     gateway: InferenceGateway = None  # set by serve()
 
     def do_GET(self):
-        if self.path == "/health":
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/health":
             health = self.gateway.health_check_all()
             all_ready = all(h["ready"] for h in health)
             self._json_response(
                 200 if all_ready else 503,
                 {"status": "healthy" if all_ready else "degraded", "chunks": health},
             )
+        elif path == "/topology":
+            topo = self.gateway.get_chain_topology()
+            self._json_response(200, {"topology": topo})
         else:
             self._json_response(404, {"error": "not found"})
 
     def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+
         if self.path == "/infer":
-            content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
 
             try:
@@ -198,6 +256,22 @@ class GatewayHTTPHandler(BaseHTTPRequestHandler):
                 "chunk_times_ms": [round(t, 3) for t in result["chunk_times_ms"]],
                 "network_overhead_ms": round(result["network_overhead_ms"], 3),
             })
+
+        elif self.path == "/relink":
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode())
+                chunk_index = int(data["chunk_index"])
+                new_host = str(data["new_host"])
+                self.gateway.update_chunk_host(chunk_index, new_host)
+                self._json_response(200, {
+                    "status": "relinked",
+                    "chunk_index": chunk_index,
+                    "new_host": new_host,
+                })
+            except (json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
+                self._json_response(400, {"error": str(e)})
+
         else:
             self._json_response(404, {"error": "not found"})
 

@@ -82,7 +82,30 @@ def cmd_run(args):
     print(f"[KAI] Partitioning model into {num_chunks} chunks...")
     chunker = LayerChunker(loader)
 
-    if len(nodes) > 1:
+    prefetch_engine = None
+    weight_manager = None
+
+    if getattr(args, "offload", False):
+        # FlexGen-style offloaded chunking
+        gpu_budget_mb = args.gpu_budget_mb
+        if gpu_budget_mb <= 0:
+            # Auto-detect from first GPU node
+            for n in nodes:
+                if n.has_gpu and n.gpu_vram_mb > 0:
+                    gpu_budget_mb = n.gpu_vram_mb * 0.8  # 80% safety margin
+                    break
+            if gpu_budget_mb <= 0:
+                gpu_budget_mb = 512.0  # fallback for CPU-only
+        ram_budget_mb = sum(n.usable_memory_mb for n in nodes) * 0.5
+
+        print(f"[KAI] Offloading enabled: GPU={gpu_budget_mb:.0f} MB, RAM={ram_budget_mb:.0f} MB, disk={args.disk_swap_dir}")
+        chunks, weight_manager, prefetch_engine = chunker.create_offloaded_chunks(
+            gpu_budget_mb=gpu_budget_mb,
+            ram_budget_mb=ram_budget_mb,
+            disk_dir=args.disk_swap_dir,
+            device=args.device,
+        )
+    elif len(nodes) > 1:
         memory_budgets = [n.usable_memory_mb for n in nodes[:num_chunks]]
         chunks = chunker.create_chunks_by_memory(memory_budgets)
     else:
@@ -93,11 +116,16 @@ def cmd_run(args):
 
     # Load real weights into chunks
     print("[KAI] Loading model weights...")
-    _load_real_weights(loader, chunks, args.device, quantize=quantize)
+    if not getattr(args, "offload", False):
+        _load_real_weights(loader, chunks, args.device, quantize=quantize)
 
     # Generate
     tokenizer = loader.get_tokenizer()
-    gen = DistributedGenerator(chunks, tokenizer, device=args.device)
+    gen = DistributedGenerator(
+        chunks, tokenizer, device=args.device,
+        prefetch_engine=prefetch_engine,
+        weight_manager=weight_manager,
+    )
 
     print(f"[KAI] Generating (max_tokens={args.max_tokens}, temp={args.temperature})...")
     print("---")
@@ -224,6 +252,9 @@ def cmd_benchmark(args):
     from experiments.experiment_runner import run_experiment
 
     hf_model = getattr(args, "hf_model", None)
+    sampling_rate = getattr(args, "sampling_rate", 1.0)
+    enable_deas = getattr(args, "enable_deas", False)
+    deas_cooldown = getattr(args, "deas_cooldown", 30.0)
     if hf_model:
         print(f"[KAI] Running HF model benchmark: mode={args.mode}, model={hf_model}")
         results = run_experiment(
@@ -234,6 +265,9 @@ def cmd_benchmark(args):
             batch_size=args.batch_size,
             output_dir=args.output_dir,
             hf_model=hf_model,
+            monitor_interval=sampling_rate,
+            enable_deas=enable_deas,
+            deas_cooldown=deas_cooldown,
         )
     else:
         print(f"[KAI] Running benchmark: mode={args.mode}, model={args.model}")
@@ -244,6 +278,9 @@ def cmd_benchmark(args):
             iterations=args.iterations,
             batch_size=args.batch_size,
             output_dir=args.output_dir,
+            monitor_interval=sampling_rate,
+            enable_deas=enable_deas,
+            deas_cooldown=deas_cooldown,
         )
     print("[KAI] Benchmark complete. Results saved to:", args.output_dir)
 
@@ -496,6 +533,12 @@ def main():
     run_parser.add_argument("--token", default=None, help="HuggingFace token for gated models")
     run_parser.add_argument("--quantize", default=None, choices=["4bit", "8bit"],
                             help="Quantize model weights (4bit NF4 or 8bit INT8)")
+    run_parser.add_argument("--offload", action="store_true",
+                            help="Enable FlexGen-style CPU/disk offloading for models exceeding GPU VRAM")
+    run_parser.add_argument("--gpu-budget-mb", type=float, default=0,
+                            help="GPU VRAM budget in MB for offloading (0 = auto-detect)")
+    run_parser.add_argument("--disk-swap-dir", default="/tmp/kai_swap",
+                            help="Directory for disk-swapped weights (default: /tmp/kai_swap)")
     run_parser.set_defaults(func=cmd_run)
 
     # --- scan ---
@@ -523,6 +566,12 @@ def main():
     bench_parser.add_argument("--iterations", type=int, default=10)
     bench_parser.add_argument("--batch-size", type=int, default=8)
     bench_parser.add_argument("--output-dir", default="logs")
+    bench_parser.add_argument("--sampling-rate", type=float, default=1.0,
+                              help="GPU monitoring sampling interval in seconds (e.g. 0.1 for 100ms)")
+    bench_parser.add_argument("--enable-deas", action="store_true",
+                              help="Enable Dynamic Energy-Aware Scheduling during Kubernetes benchmark")
+    bench_parser.add_argument("--deas-cooldown", type=float, default=30.0,
+                              help="DEAS minimum seconds between migration attempts (default: 30)")
     bench_parser.set_defaults(func=cmd_benchmark)
 
     # --- dashboard ---

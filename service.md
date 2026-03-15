@@ -61,11 +61,42 @@ KAI's built-in energy benchmarking proves this. Run `python kai_cli.py benchmark
 
 ---
 
+## Real-Time Energy Instrumentation (Phase 20)
+
+- **High-frequency GPU sampling** — configurable down to 100ms intervals for capturing transient power spikes.
+- **Ring buffer** — bounded in-memory buffer (default 600 samples) for efficient recent-sample access without unbounded memory growth.
+- **TDP auto-detection** — automatically reads GPU Thermal Design Power via NVML; computes real-time `tdp_pct` for each sample.
+- **Trapezoidal energy integration** — more accurate energy calculation than simple `avg_power * time`, especially with variable workloads.
+- **Event bus** — async pub/sub system for threshold events. Subscribers receive real-time notifications when GPU power crosses configurable thresholds.
+- **Power threshold service** — classifies GPU power draw as OPTIMAL (<70% TDP), WARNING (70-80%), or CRITICAL (>=80%) and publishes state change events.
+
+---
+
+## Dynamic Energy-Aware Scheduling — DEAS (Phase 21)
+
+- **Energy-Efficiency Ratio (EER)** — `throughput / avg_power` metric computed per node and cluster-wide.
+- **Live chunk migration** — Pause/Checkpoint/Resume gRPC RPCs allow moving model chunks between nodes without restarting the pipeline.
+- **Gateway relinking** — thread-safe hot-swapping of chunk endpoints during migration (`POST /relink`).
+- **DEAS scheduler** — subscribes to CRITICAL power events and orchestrates 5-step migrations (Pause → Checkpoint → Migrate → Relink → Resume) with configurable cooldown.
+- **Topology inspection** — `GET /topology` returns the current chunk-to-host mapping.
+
+---
+
+## CPU/Disk Offloading (Phase 22)
+
+- **Tiered weight management** — places model weights across GPU VRAM, System RAM, and Disk (safetensors format) based on configurable budgets.
+- **Double-buffered prefetching** — while the GPU processes Layer N, a background thread loads Layer N+1 from RAM/disk into a second buffer, hiding transfer latency behind computation.
+- **CLI integration** — `--offload` flag enables FlexGen-style offloading; `--gpu-budget-mb` and `--disk-swap-dir` control placement.
+- **Models exceeding VRAM** — KAI can now run models that don't fit in total cluster GPU memory by spilling to RAM and disk.
+
+---
+
 ## Monitoring & Visualization
 
-- **Real-time GPU/CPU monitoring** at 1-second resolution via NVML and psutil.
-- **8 publication-quality plots** — power over time, latency distribution, energy comparison, per-chunk latency, etc.
-- **Interactive Streamlit dashboard** for exploring results, comparing experiments, and auto-refreshing live data.
+- **Real-time GPU/CPU monitoring** at configurable resolution (down to 100ms) via NVML and psutil.
+- **10 publication-quality plots** — power over time, latency distribution, energy comparison, per-chunk latency, migration energy impact, VRAM vs RAM tradeoff, etc.
+- **Interactive Streamlit dashboard** for exploring results, comparing experiments, viewing migration events, offloading trade-offs, and auto-refreshing live data.
+- **Threshold event endpoints** — `GET /metrics/threshold` and `GET /metrics/events` for real-time power status.
 
 ---
 
@@ -107,9 +138,11 @@ This means a LLaMA 7B model (~14 GB in fp16) can be reduced to ~3.5 GB in 4-bit 
 | Command | What It Does |
 |---------|-------------|
 | `kai_cli.py run` | Generate text with a distributed HuggingFace model |
+| `kai_cli.py run --offload` | Run with CPU/disk offloading for oversized models |
 | `kai_cli.py scan` | Show available GPU/CPU/RAM on your machine or cluster |
 | `kai_cli.py partition` | Preview how a model would be split across N nodes |
 | `kai_cli.py benchmark` | Run energy benchmarking (local, K8s, or both) |
+| `kai_cli.py benchmark --sampling-rate 0.1` | Benchmark with 100ms GPU sampling |
 | `kai_cli.py benchmark --hf-model <name>` | Benchmark a HuggingFace model with energy monitoring |
 | `kai_cli.py dashboard` | Launch the Streamlit visualization dashboard |
 | `kai_cli.py build` | Build Docker images for chunk/gateway/monitor |
@@ -139,10 +172,14 @@ Any HuggingFace `AutoModelForCausalLM` architecture is supported.
 
 ## Test Coverage
 
-- **82 integration tests** — all passing
+- **~140 integration tests** — all passing
   - 25 tests for energy benchmarking (Phases 1-13)
   - 30 tests for distributed inference (Phases 14-18)
   - 27 tests for gap coverage & production readiness (Phase 19)
+  - ~15 tests for real-time instrumentation & event bus (Phase 20)
+  - ~19 tests for dynamic scheduling & migration (Phase 21)
+  - ~14 tests for CPU/disk offloading & prefetching (Phase 22)
+  - ~14 tests for validation & energy analysis (Phase 23)
 
 ---
 
@@ -186,7 +223,7 @@ KAI requires Python, PyTorch, Kubernetes, Docker, and multiple dependencies. It'
 
 ### 4. You Don't Have Multiple Machines
 
-KAI's core value is **distributing a model across multiple nodes**. If you only have one PC, KAI's distributed features don't help. Instead:
+KAI's core value is **distributing a model across multiple nodes**. If you only have one PC, KAI's distributed features don't help — **but Phase 22's CPU/disk offloading allows running models that exceed your GPU's VRAM on a single machine** by spilling weights to RAM and disk. For other single-machine alternatives:
 
 - **AirLLM** — Streams layers from disk on a single machine (slow but works with just disk space).
 - **Ollama with quantization** — Runs 4-bit quantized models that fit in less VRAM.
@@ -235,13 +272,16 @@ KAI's quantization is simpler (NF4 or INT8 only), but it combines with distribut
 | **Lower power consumption** — same output at less than half the watts | Complex setup vs. single-binary tools like Ollama |
 | Energy benchmarking — proves the savings with real data | Not designed for production throughput |
 | Kubernetes-native with health checks and scaling | Inference only — no training or fine-tuning |
-| Smart auto-partitioning based on real hardware | Requires multiple machines to be useful |
+| Smart auto-partitioning based on real hardware | Requires multiple machines for full energy savings |
 | 4-bit/8-bit quantization to reduce memory per chunk | Fewer quant formats than llama.cpp/GGUF |
 | Private and secure (your own cluster) | Overkill for casual local use |
 | Full monitoring + dashboard | |
+| CPU/disk offloading for models exceeding VRAM | |
+| Dynamic energy-aware scheduling with live migration | |
+| Real-time power threshold alerts via event bus | |
 
-**KAI is best when:** You have 2+ low-end PCs with small GPUs, you want to run a model that doesn't fit on any single one, you want **lower power consumption** than a single high-end GPU, and you want provable energy metrics.
+**KAI is best when:** You have 2+ low-end PCs with small GPUs, you want to run a model that doesn't fit on any single one, you want **lower power consumption** than a single high-end GPU, and you want provable energy metrics. Or: you have a single machine with limited VRAM and want offloading to RAM/disk.
 
-**KAI is NOT best when:** You need maximum speed above all else, need production throughput, want zero-setup local chat, or only have one machine.
+**KAI is NOT best when:** You need maximum speed above all else, need production throughput, want zero-setup local chat, or only have one machine with no offloading needs.
 
 ---

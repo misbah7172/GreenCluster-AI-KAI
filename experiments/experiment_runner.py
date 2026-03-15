@@ -69,6 +69,8 @@ def _run_k8s(
     wait_timeout: float,
     warmup: int,
     auto_teardown: bool,
+    enable_deas: bool = False,
+    deas_cooldown: float = 30.0,
 ) -> Dict[str, Any]:
     # k8s_runner uses importlib to load the controller; import it the same way
     _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -88,6 +90,8 @@ def _run_k8s(
         wait_timeout=wait_timeout,
         warmup_iterations=warmup,
         auto_teardown=auto_teardown,
+        enable_deas=enable_deas,
+        deas_cooldown=deas_cooldown,
     )
 
 
@@ -308,6 +312,8 @@ def run_experiment(
     wait_timeout: float = 300.0,
     auto_teardown: bool = True,
     hf_model: Optional[str] = None,
+    enable_deas: bool = False,
+    deas_cooldown: float = 30.0,
 ) -> Dict[str, Any]:
     """Run local, kubernetes, or both experiments.
 
@@ -339,6 +345,10 @@ def run_experiment(
         Teardown K8s resources after the experiment.
     hf_model : str, optional
         HuggingFace model name for benchmarking with real HF models.
+    enable_deas : bool
+        Enable Dynamic Energy-Aware Scheduling in Kubernetes mode.
+    deas_cooldown : float
+        Minimum seconds between DEAS migration attempts.
 
     Returns
     -------
@@ -400,6 +410,8 @@ def run_experiment(
             wait_timeout=wait_timeout,
             warmup=warmup,
             auto_teardown=auto_teardown,
+            enable_deas=enable_deas,
+            deas_cooldown=deas_cooldown,
         )
         combined["kubernetes"] = k8s_result
         logger.info("--- KUBERNETES experiment complete ---")

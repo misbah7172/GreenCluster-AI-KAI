@@ -82,6 +82,8 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
         super().__init__()
         self.chunk_id = chunk_id
         self.device = torch.device(device)
+        self._paused = False
+        self._last_hidden_state = None
 
         logger.info(
             "Loading chunk %d/%d (model=%s, weights=%s, device=%s)",
@@ -104,6 +106,9 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
 
     def Infer(self, request, context):
         """Run forward pass on the chunk and return the output tensor."""
+        if self._paused:
+            context.abort(grpc.StatusCode.UNAVAILABLE, "Chunk is paused for migration")
+
         start = time.perf_counter()
 
         input_tensor = _deserialize_tensor(request.tensor_data)
@@ -111,6 +116,9 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
 
         with torch.no_grad():
             output_tensor = self.chunk(input_tensor)
+
+        # Cache hidden state for potential checkpointing
+        self._last_hidden_state = output_tensor.detach().cpu()
 
         output_tensor = output_tensor.cpu()
         elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -132,10 +140,87 @@ class InferenceServicer(inference_pb2_grpc.InferenceServiceServicer):
 
     def HealthCheck(self, request, context):
         """Return readiness status."""
+        status = "ready"
+        if self._paused:
+            status = "paused"
+        elif not self._ready:
+            status = "not ready"
         return inference_pb2.HealthResponse(
-            ready=self._ready,
+            ready=self._ready and not self._paused,
             chunk_id=self.chunk_id,
-            status="ready" if self._ready else "not ready",
+            status=status,
+        )
+
+    def Pause(self, request, context):
+        """Pause inference — reject new Infer calls until resumed."""
+        self._paused = True
+        logger.info("Chunk %d paused", self.chunk_id)
+        return inference_pb2.PauseResponse(
+            success=True,
+            status="paused",
+        )
+
+    def Checkpoint(self, request, context):
+        """Save hidden state + weights to disk for migration."""
+        start = time.perf_counter()
+        output_path = request.output_path or f"/tmp/kai_checkpoint_{self.chunk_id}"
+        os.makedirs(output_path, exist_ok=True)
+
+        # Save model weights
+        weights_path = os.path.join(output_path, f"chunk_{self.chunk_id}_weights.pt")
+        torch.save(self.chunk.state_dict(), weights_path)
+
+        # Save hidden state if available
+        state_path = os.path.join(output_path, f"chunk_{self.chunk_id}_hidden.pt")
+        if self._last_hidden_state is not None:
+            torch.save(self._last_hidden_state, state_path)
+
+        total_size = os.path.getsize(weights_path)
+        if os.path.exists(state_path):
+            total_size += os.path.getsize(state_path)
+
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        logger.info(
+            "Chunk %d checkpointed to %s (%.2f MB, %.2f ms)",
+            self.chunk_id, output_path, total_size / (1024 * 1024), elapsed_ms,
+        )
+
+        return inference_pb2.CheckpointResponse(
+            success=True,
+            checkpoint_path=output_path,
+            size_bytes=total_size,
+            checkpoint_time_ms=elapsed_ms,
+        )
+
+    def Resume(self, request, context):
+        """Restore hidden state from checkpoint and unpause."""
+        checkpoint_path = request.checkpoint_path
+        if checkpoint_path:
+            state_path = os.path.join(
+                checkpoint_path, f"chunk_{self.chunk_id}_hidden.pt"
+            )
+            if os.path.exists(state_path):
+                self._last_hidden_state = torch.load(
+                    state_path, map_location="cpu", weights_only=True
+                )
+                logger.info("Chunk %d restored hidden state from %s", self.chunk_id, state_path)
+
+            weights_path = os.path.join(
+                checkpoint_path, f"chunk_{self.chunk_id}_weights.pt"
+            )
+            if os.path.exists(weights_path):
+                state_dict = torch.load(
+                    weights_path, map_location=self.device, weights_only=True
+                )
+                self.chunk.load_state_dict(state_dict)
+                self.chunk.eval()
+                logger.info("Chunk %d restored weights from %s", self.chunk_id, weights_path)
+
+        self._paused = False
+        logger.info("Chunk %d resumed", self.chunk_id)
+        return inference_pb2.ResumeResponse(
+            success=True,
+            status="resumed",
         )
 
 

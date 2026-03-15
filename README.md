@@ -11,6 +11,9 @@ KAI is a platform that enables running **large AI models on clusters of low-end 
 - **Smart Auto-Partitioning** — Automatically detects GPU VRAM and RAM on each node and assigns layers proportionally.
 - **Text Generation** — Full autoregressive generation pipeline with temperature, top-k, top-p sampling, and streaming output.
 - **Energy Benchmarking** — Measures GPU power draw, CPU usage, and inference latency to compare local vs. Kubernetes deployment costs.
+- **Real-Time Energy Instrumentation** — Sub-100ms GPU sampling, ring buffers, TDP auto-detection, trapezoidal energy integration, and power threshold alerts via an async event bus.
+- **Dynamic Energy-Aware Scheduling (DEAS)** — Automatically migrates chunks away from overheating nodes using a 5-step Pause/Checkpoint/Migrate/Relink/Resume workflow with configurable cooldown.
+- **CPU/Disk Offloading** — FlexGen-style tiered weight management (GPU VRAM → System RAM → Disk) with double-buffered prefetching to hide transfer latency.
 - **Single-Command CLI** — `python kai_cli.py run --model <name> --prompt "Hello" --max-tokens 100`
 - **Quantization** — Optional 4-bit (NF4) and 8-bit (INT8) quantization via bitsandbytes to reduce memory per chunk.
 - **Docker Build & Prepare** — `kai build` builds all Docker images; `kai prepare` downloads, chunks, and saves weights for K8s deployment.
@@ -41,6 +44,12 @@ python kai_cli.py benchmark --model transformer --mode local
 
 # Benchmark a HuggingFace model directly
 python kai_cli.py benchmark --hf-model sshleifer/tiny-gpt2 --mode local
+
+# Benchmark with high-frequency GPU sampling (100ms)
+python kai_cli.py benchmark --hf-model sshleifer/tiny-gpt2 --mode local --sampling-rate 0.1
+
+# Run with CPU/disk offloading for oversized models
+python kai_cli.py run --model sshleifer/tiny-gpt2 --prompt "Hello" --offload --gpu-budget-mb 2000
 ```
 
 ---
@@ -222,21 +231,26 @@ KAI/
 │   ├── transformer.py            #   Transformer encoder model
 │   ├── cnn.py                    #   CNN classification model
 │   ├── chunker.py                #   Model splitting into N sequential chunks
-│   ├── chunk_server.py           #   gRPC server for a single model chunk
-│   ├── gateway.py                #   HTTP gateway chaining chunk services
+│   ├── chunk_server.py           #   gRPC server for a single model chunk (+ Pause/Checkpoint/Resume)
+│   ├── gateway.py                #   HTTP gateway chaining chunk services (+ /relink, /topology)
 │   ├── hf_loader.py              #   HuggingFace model loader (layer extraction)
 │   ├── layer_chunker.py          #   Layer-wise model splitting for distributed inference
 │   ├── weight_utils.py           #   Partial weight loading from HF checkpoints
 │   ├── quantizer.py              #   4-bit/8-bit quantization via bitsandbytes
-│   ├── generation.py             #   Autoregressive text generation across chunks
+│   ├── generation.py             #   Autoregressive text generation across chunks (+ offloaded prefetch)
 │   ├── resource_detector.py      #   GPU/CPU/RAM detection (local + K8s nodes)
-│   └── auto_partitioner.py       #   Smart layer-to-node assignment
+│   ├── auto_partitioner.py       #   Smart layer-to-node assignment
+│   ├── deas_scheduler.py         #   Dynamic Energy-Aware Scheduler (Phase 21)
+│   ├── tiered_weight_manager.py  #   GPU/RAM/Disk tiered weight placement (Phase 22)
+│   └── prefetch_engine.py        #   Double-buffered async weight prefetching (Phase 22)
 │
 ├── monitoring/                   # Power and performance monitoring
-│   ├── gpu_monitor.py            #   NVML-based GPU power/util/temp sampling
+│   ├── gpu_monitor.py            #   NVML-based GPU power/util/temp sampling (+ ring buffer, TDP)
 │   ├── cpu_monitor.py            #   psutil-based CPU usage sampling
-│   ├── metrics.py                #   Unified MetricsCollector (GPU + CPU + latency)
-│   └── monitor_service.py        #   HTTP service wrapping MetricsCollector
+│   ├── metrics.py                #   Unified MetricsCollector (GPU + CPU + latency + trapezoidal energy)
+│   ├── monitor_service.py        #   HTTP service wrapping MetricsCollector (+ /threshold, /events)
+│   ├── event_bus.py              #   Async pub/sub for power threshold events (Phase 20)
+│   └── threshold_service.py      #   TDP-relative power threshold evaluation (Phase 20)
 │
 ├── experiments/                  # Experiment runners
 │   ├── local_runner.py           #   Single-GPU inference experiment
@@ -244,14 +258,14 @@ KAI/
 │   └── experiment_runner.py      #   Unified orchestrator (local, k8s, or both)
 │
 ├── analysis/                     # Post-experiment analysis
-│   ├── analyzer.py               #   Metrics computation and comparison
-│   └── plots.py                  #   Matplotlib visualization (8 plot types)
+│   ├── analyzer.py               #   Metrics computation, comparison, migration energy (Phase 23)
+│   └── plots.py                  #   Matplotlib visualization (10 plot types incl. migration/offloading)
 │
 ├── dashboard/                    # Web dashboard
-│   └── app.py                    #   Streamlit interactive visualization
+│   └── app.py                    #   Streamlit interactive visualization (+ migration/offloading panels)
 │
 ├── kubernetes/                   # Kubernetes configuration
-│   ├── controller.py             #   Python K8s controller (deploy/status/teardown)
+│   ├── controller.py             #   Python K8s controller (deploy/status/teardown + DEAS + thresholds)
 │   ├── deployments/              #   Deployment YAMLs (chunk, gateway, monitor)
 │   ├── services/                 #   Service YAMLs (ClusterIP, NodePort)
 │   └── gpu-resource-quota.yaml   #   GPU resource quota for namespace
@@ -263,12 +277,16 @@ KAI/
 │   └── docker-compose.yml        #   Local multi-container testing
 │
 ├── proto/                        # gRPC definitions
-│   └── inference.proto           #   InferenceService with Infer + HealthCheck RPCs
+│   └── inference.proto           #   InferenceService with Infer + HealthCheck + Pause/Checkpoint/Resume RPCs
 │
 ├── tests/                        # Test suites
 │   ├── test_integration.py       #   25 integration tests (Phases 1-13)
 │   ├── test_distributed.py       #   30 integration tests (Phases 14-18)
-│   └── test_phase19.py           #   27 integration tests (Phase 19)
+│   ├── test_phase19.py           #   27 integration tests (Phase 19)
+│   ├── test_phase20.py           #   ~15 tests (Phase 20: instrumentation, event bus, thresholds)
+│   ├── test_phase21.py           #   ~19 tests (Phase 21: EER, DEAS, migration, relinking)
+│   ├── test_phase22.py           #   ~14 tests (Phase 22: tiered weights, prefetching, offloading)
+│   └── test_phase23.py           #   ~14 tests (Phase 23: validation, analysis, plots)
 │
 ├── logs/                         # Experiment output (JSON)
 ├── docs/                         # Phase documentation
@@ -346,10 +364,11 @@ KAI/
 
 | Path | Protocol | Details |
 |------|----------|---------|
-| Client → Gateway | HTTP | POST `/infer`, GET `/health` |
+| Client → Gateway | HTTP | POST `/infer`, GET `/health`, GET `/topology`, POST `/relink` |
 | Gateway → Chunks | gRPC | Binary tensor serialization (256 MB max) |
-| Client → Monitor | HTTP | GET `/metrics`, POST `/start`, `/stop` |
+| Client → Monitor | HTTP | GET `/metrics`, POST `/start`, `/stop`, GET `/metrics/threshold`, `/metrics/events` |
 | Chunks ↔ Chunks | gRPC | Sequential pipeline (Chunk 0 → 1 → ... → N) |
+| Chunks (migration) | gRPC | `Pause`, `Checkpoint`, `Resume` RPCs for live migration |
 
 ---
 
@@ -489,7 +508,7 @@ python -m analysis.plots \
     --k8s logs/k8s_results_<ts>.json
 ```
 
-Eight plot types are generated as PNG files:
+Ten plot types are generated as PNG files:
 
 | Plot | Description |
 |------|-------------|
@@ -501,6 +520,8 @@ Eight plot types are generated as PNG files:
 | Throughput comparison | Bar chart of inference rate |
 | Latency distribution | Box plot of per-iteration latencies |
 | Per-chunk latency | Bar chart of K8s chunk processing times |
+| Migration energy impact | Power timeline with migration windows highlighted (Phase 23) |
+| VRAM vs RAM tradeoff | Grouped bar chart of GPU vs CPU execution time per chunk (Phase 23) |
 
 ---
 
@@ -521,6 +542,8 @@ The dashboard provides:
 - **Latency Comparison**: Average latency bar chart and per-iteration distribution.
 - **Energy Comparison**: Total energy and energy-per-inference bar charts.
 - **Per-Chunk Latency**: K8s-only bar chart of chunk processing times.
+- **Migration Energy Impact**: Power timeline with migration event annotations and summary table (Phase 23).
+- **VRAM vs RAM Execution Trade-off**: Side-by-side GPU vs CPU latency per chunk with memory saved annotations (Phase 23).
 - **Experiment Configuration**: Collapsible JSON view of experiment parameters.
 - **Raw JSON Viewer**: Full raw data inspection.
 
@@ -568,6 +591,9 @@ Options:
   --num-chunks    Number of model chunks           (default: 2)
   --stream        Stream output token by token
   --quantize      Quantization mode (4bit/8bit)    (default: none)
+  --offload       Enable CPU/disk offloading for models exceeding GPU VRAM
+  --gpu-budget-mb GPU VRAM budget in MB            (default: 0 = auto-detect)
+  --disk-swap-dir Disk swap directory              (default: /tmp/kai_swap)
 ```
 
 #### `scan` — Detect Resources
@@ -592,6 +618,7 @@ Options:
   --hf-model      HuggingFace model name for HF benchmark
   --mode          local | kubernetes | both        (default: local)
   --iterations    Number of inference iterations   (default: 50)
+  --sampling-rate GPU sampling interval in seconds (default: 1.0, e.g. 0.1 for 100ms)
 ```
 
 #### `build` — Build Docker Images
@@ -689,11 +716,14 @@ Options:
 The following metrics are computed for each experiment run and used for comparison:
 
 ```
-Total Energy (Wh)          = Average Power (W) × Total Runtime (s) / 3600
+Total Energy (Wh)          = Trapezoidal integration of power samples (or avg × time fallback)
 Energy per Inference (Wh)  = Total Energy (Wh) / Number of Inferences
 Throughput (inf/s)         = Number of Inferences / Total Runtime (s)
 Performance per Watt       = Throughput / Average Power (W)
+Energy Efficiency Ratio    = Throughput / Average Power (EER, Phase 21)
 Network Overhead (K8s)     = End-to-End Latency − Sum of Chunk Compute Times
+Migration Energy (Wh)      = Trapezoidal integration during migration window (Phase 23)
+Offloading Overhead (%)    = (Offloaded Latency − Baseline Latency) / Baseline × 100 (Phase 23)
 ```
 
 Latency percentiles (p50, p90, p95, p99) and standard deviation are also computed.
@@ -716,7 +746,7 @@ Latency percentiles (p50, p90, p95, p99) and standard deviation are also compute
 |--------|--------|-------------|
 | Summary comparison table | CSV | All metrics side-by-side for local vs. Kubernetes |
 | Analysis export | JSON | Machine-readable comparison data |
-| Visualization plots | 8 × PNG | Publication-quality charts (150 DPI) |
+| Visualization plots | 10 × PNG | Publication-quality charts (150 DPI) |
 | Interactive dashboard | Streamlit | Web-based exploration of all metrics and plots |
 
 ---
@@ -793,6 +823,65 @@ Latency percentiles (p50, p90, p95, p99) and standard deviation are also compute
 - [x] `--quantize` argument accepted by `run` and `prepare` commands
 - [x] Dockerfile includes HuggingFace and bitsandbytes dependencies
 - [x] requirements.txt includes bitsandbytes
+
+### Real-Time Instrumentation & Event Bus (Phase 20) — ~15 tests
+
+- [x] GPUMonitor accepts sub-second intervals (100ms)
+- [x] Ring buffer bounded at configured buffer_size
+- [x] get_recent_samples returns correct count
+- [x] Trapezoidal energy integration more accurate than avg*time
+- [x] Single-sample energy fallback works
+- [x] EventBus delivers events to subscribers
+- [x] EventBus level_filter works correctly
+- [x] EventBus concurrent pub/sub is thread-safe
+- [x] PowerThresholdService classifies < 70% TDP as OPTIMAL
+- [x] PowerThresholdService classifies 70-80% TDP as WARNING
+- [x] PowerThresholdService classifies >= 80% TDP as CRITICAL
+- [x] monitor_service --help shows --sampling-rate flag
+
+### Dynamic Scheduling & Migration (Phase 21) — ~19 tests
+
+- [x] compute_summary includes energy_efficiency_ratio key
+- [x] EER = throughput / power computed correctly
+- [x] DEASScheduler importable with all data classes
+- [x] compute_cluster_eer returns correct value
+- [x] should_rebalance detects CRITICAL nodes
+- [x] Cooldown prevents rapid migration triggers
+- [x] plan_migration returns valid MigrationPlan objects
+- [x] InferenceServicer has Pause/Checkpoint/Resume methods
+- [x] Paused chunk rejects Infer calls with UNAVAILABLE
+- [x] InferenceGateway has update_chunk_host method
+- [x] GET /topology returns chain mapping
+- [x] POST /relink succeeds
+
+### CPU/Disk Offloading & Prefetching (Phase 22) — ~14 tests
+
+- [x] TieredWeightManager importable with StorageTier enum
+- [x] plan_placement fills GPU first, then RAM, then disk
+- [x] Capacity tracking accurate after placement
+- [x] get_tier_stats returns 3-tier list
+- [x] PrefetchEngine importable with all methods
+- [x] get_prefetch_stats returns expected keys
+- [x] CLI --offload flag present in run --help
+- [x] DistributedGenerator accepts prefetch_engine and weight_manager kwargs
+- [x] _forward_all_chunks_offloaded method exists
+
+### Validation & Energy Analysis (Phase 23) — ~14 tests
+
+- [x] EventBus publish-to-callback latency < 500ms
+- [x] ThresholdService detects CRITICAL within 500ms
+- [x] Checkpoint + restore produces bit-exact tensors
+- [x] State dict roundtrip is lossless
+- [x] StorageTier enum values correct
+- [x] plan_placement fills GPU first
+- [x] PrefetchEngine stats structure correct
+- [x] Power returns to baseline after migration spike (mock)
+- [x] ExperimentAnalyzer has compute_migration_energy method
+- [x] ExperimentAnalyzer has compute_offloading_overhead method
+- [x] compute_offloading_overhead calculates correct delta and pct
+- [x] ExperimentAnalyzer has analyse_deas method
+- [x] plot_migration_energy_impact importable
+- [x] plot_vram_ram_tradeoff importable
 
 ---
 

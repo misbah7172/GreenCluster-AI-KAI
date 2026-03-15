@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0finference.proto\x12\x03kai\"u\n\x0cInferRequest\x12\x13\n\x0btensor_data\x18\x01 \x01(\x0c\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\x05\x12\x12\n\nrequest_id\x18\x03 \x01(\t\x12\x14\n\x0ctensor_shape\x18\x04 \x03(\x05\x12\x14\n\x0ctensor_dtype\x18\x05 \x01(\t\"\x91\x01\n\rInferResponse\x12\x13\n\x0btensor_data\x18\x01 \x01(\x0c\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\x05\x12\x12\n\nrequest_id\x18\x03 \x01(\t\x12\x14\n\x0ctensor_shape\x18\x04 \x03(\x05\x12\x14\n\x0ctensor_dtype\x18\x05 \x01(\t\x12\x19\n\x11inference_time_ms\x18\x06 \x01(\x02\"\x0f\n\rHealthRequest\"A\n\x0eHealthResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\x05\x12\x0e\n\x06status\x18\x03 \x01(\t2z\n\x10InferenceService\x12.\n\x05Infer\x12\x11.kai.InferRequest\x1a\x12.kai.InferResponse\x12\x36\n\x0bHealthCheck\x12\x12.kai.HealthRequest\x1a\x13.kai.HealthResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0finference.proto\x12\x03kai\"u\n\x0cInferRequest\x12\x13\n\x0btensor_data\x18\x01 \x01(\x0c\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\x05\x12\x12\n\nrequest_id\x18\x03 \x01(\t\x12\x14\n\x0ctensor_shape\x18\x04 \x03(\x05\x12\x14\n\x0ctensor_dtype\x18\x05 \x01(\t\"\x91\x01\n\rInferResponse\x12\x13\n\x0btensor_data\x18\x01 \x01(\x0c\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\x05\x12\x12\n\nrequest_id\x18\x03 \x01(\t\x12\x14\n\x0ctensor_shape\x18\x04 \x03(\x05\x12\x14\n\x0ctensor_dtype\x18\x05 \x01(\t\x12\x19\n\x11inference_time_ms\x18\x06 \x01(\x02\"\x0f\n\rHealthRequest\"A\n\x0eHealthResponse\x12\r\n\x05ready\x18\x01 \x01(\x08\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\x05\x12\x0e\n\x06status\x18\x03 \x01(\t\"\x0e\n\x0cPauseRequest\"0\n\rPauseResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0e\n\x06status\x18\x02 \x01(\t\"(\n\x11\x43heckpointRequest\x12\x13\n\x0boutput_path\x18\x01 \x01(\t\"n\n\x12\x43heckpointResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x17\n\x0f\x63heckpoint_path\x18\x02 \x01(\t\x12\x12\n\nsize_bytes\x18\x03 \x01(\x03\x12\x1a\n\x12\x63heckpoint_time_ms\x18\x04 \x01(\x02\"(\n\rResumeRequest\x12\x17\n\x0f\x63heckpoint_path\x18\x01 \x01(\t\"1\n\x0eResumeResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x0e\n\x06status\x18\x02 \x01(\t2\x9c\x02\n\x10InferenceService\x12.\n\x05Infer\x12\x11.kai.InferRequest\x1a\x12.kai.InferResponse\x12\x36\n\x0bHealthCheck\x12\x12.kai.HealthRequest\x1a\x13.kai.HealthResponse\x12.\n\x05Pause\x12\x11.kai.PauseRequest\x1a\x12.kai.PauseResponse\x12=\n\nCheckpoint\x12\x16.kai.CheckpointRequest\x1a\x17.kai.CheckpointResponse\x12\x31\n\x06Resume\x12\x12.kai.ResumeRequest\x1a\x13.kai.ResumeResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -39,6 +39,18 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_HEALTHREQUEST']._serialized_end=306
   _globals['_HEALTHRESPONSE']._serialized_start=308
   _globals['_HEALTHRESPONSE']._serialized_end=373
-  _globals['_INFERENCESERVICE']._serialized_start=375
-  _globals['_INFERENCESERVICE']._serialized_end=497
+  _globals['_PAUSEREQUEST']._serialized_start=375
+  _globals['_PAUSEREQUEST']._serialized_end=389
+  _globals['_PAUSERESPONSE']._serialized_start=391
+  _globals['_PAUSERESPONSE']._serialized_end=439
+  _globals['_CHECKPOINTREQUEST']._serialized_start=441
+  _globals['_CHECKPOINTREQUEST']._serialized_end=481
+  _globals['_CHECKPOINTRESPONSE']._serialized_start=483
+  _globals['_CHECKPOINTRESPONSE']._serialized_end=593
+  _globals['_RESUMEREQUEST']._serialized_start=595
+  _globals['_RESUMEREQUEST']._serialized_end=635
+  _globals['_RESUMERESPONSE']._serialized_start=637
+  _globals['_RESUMERESPONSE']._serialized_end=686
+  _globals['_INFERENCESERVICE']._serialized_start=689
+  _globals['_INFERENCESERVICE']._serialized_end=973
 # @@protoc_insertion_point(module_scope)

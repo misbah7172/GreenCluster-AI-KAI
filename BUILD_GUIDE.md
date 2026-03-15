@@ -24,13 +24,27 @@ project/
 │   ├── transformer.py        # Transformer model definition
 │   ├── cnn.py                # CNN model definition
 │   ├── chunker.py            # Model splitting/chunking utility
-│   └── chunk_server.py       # gRPC server for serving a model chunk
+│   ├── chunk_server.py       # gRPC server for serving a model chunk (+ migration RPCs)
+│   ├── gateway.py            # HTTP gateway for chaining chunks (+ relinking)
+│   ├── hf_loader.py          # HuggingFace model loader
+│   ├── layer_chunker.py      # Layer-wise model splitting
+│   ├── weight_utils.py       # Partial weight loading from HF checkpoints
+│   ├── quantizer.py          # 4-bit/8-bit quantization
+│   ├── generation.py         # Autoregressive text generation (+ offloaded prefetch)
+│   ├── resource_detector.py  # GPU/CPU/RAM detection
+│   ├── auto_partitioner.py   # Smart layer-to-node assignment
+│   ├── deas_scheduler.py     # Dynamic Energy-Aware Scheduler (Phase 21)
+│   ├── tiered_weight_manager.py  # GPU/RAM/Disk tiered weight placement (Phase 22)
+│   └── prefetch_engine.py    # Double-buffered async weight prefetching (Phase 22)
 │
 ├── monitoring/               # Power and performance monitoring
 │   ├── __init__.py
-│   ├── gpu_monitor.py        # NVIDIA NVML-based GPU power monitoring
+│   ├── gpu_monitor.py        # NVIDIA NVML-based GPU power monitoring (+ ring buffer, TDP)
 │   ├── cpu_monitor.py        # CPU usage monitoring
-│   └── metrics.py            # Unified metrics collection and export
+│   ├── metrics.py            # Unified metrics collection (+ trapezoidal energy, EER)
+│   ├── monitor_service.py    # HTTP service wrapping MetricsCollector (+ threshold endpoints)
+│   ├── event_bus.py          # Async pub/sub for threshold events (Phase 20)
+│   └── threshold_service.py  # TDP-relative power threshold evaluation (Phase 20)
 │
 ├── kubernetes/               # Kubernetes configuration and controller
 │   ├── deployments/
@@ -42,7 +56,7 @@ project/
 │   │   ├── gateway-service.yaml
 │   │   └── monitor-service.yaml
 │   ├── gpu-resource-quota.yaml
-│   └── controller.py         # Python K8s controller script
+│   └── controller.py         # Python K8s controller (+ DEAS, threshold propagation)
 │
 ├── docker/                   # Dockerfiles
 │   ├── Dockerfile.chunk      # Model chunk microservice
@@ -56,18 +70,27 @@ project/
 │   └── experiment_runner.py  # Unified experiment orchestrator
 │
 ├── dashboard/                # Streamlit visualization dashboard
-│   └── app.py
+│   └── app.py                # (+ migration/offloading panels)
 │
 ├── logs/                     # Experiment output logs (CSV/JSON)
 │   └── .gitkeep
 │
 ├── analysis/                 # Post-experiment analysis and plotting
 │   ├── __init__.py
-│   ├── analyzer.py           # Compute energy, latency, efficiency
-│   └── plots.py              # Matplotlib visualization
+│   ├── analyzer.py           # Compute energy, latency, efficiency (+ migration, offloading)
+│   └── plots.py              # Matplotlib visualization (10 plot types)
 │
 ├── proto/                    # gRPC protocol buffer definitions
-│   └── inference.proto
+│   └── inference.proto       # InferenceService (+ Pause/Checkpoint/Resume RPCs)
+│
+├── tests/                    # Test suites
+│   ├── test_integration.py   # 25 tests (Phases 1-13)
+│   ├── test_distributed.py   # 30 tests (Phases 14-18)
+│   ├── test_phase19.py       # 27 tests (Phase 19)
+│   ├── test_phase20.py       # ~15 tests (Phase 20)
+│   ├── test_phase21.py       # ~19 tests (Phase 21)
+│   ├── test_phase22.py       # ~14 tests (Phase 22)
+│   └── test_phase23.py       # ~14 tests (Phase 23)
 │
 ├── requirements.txt
 ├── BUILD_GUIDE.md
@@ -809,6 +832,88 @@ Phase 1  (Scaffolding)
 
 ---
 
+### Phase 20: Real-Time Energy Instrumentation & Trigger Framework
+
+**Goal:** Replace coarse 1-second GPU sampling with sub-100ms monitoring, add bounded ring buffers, auto-detect GPU TDP, compute energy via trapezoidal integration, and create an async event bus for power threshold alerts.
+
+**Tasks:**
+
+1. **`monitoring/gpu_monitor.py`** (modified) — Add ring buffer (`collections.deque(maxlen=buffer_size)`), TDP auto-detection via NVML, spike callback when power >= 80% TDP, `tdp_pct` key in samples, `get_recent_samples(n)` and `get_tdp_watts()` methods.
+
+2. **`monitoring/metrics.py`** (modified) — Replace `avg_power * time / 3600` with trapezoidal integration via `_compute_energy_trapezoidal()`. Add `enable_threshold`, `tdp_watts`, `node_name` params. Wire EventBus and PowerThresholdService lifecycle.
+
+3. **`monitoring/event_bus.py`** (new) — Thread-safe async pub/sub with `ThresholdLevel` enum (OPTIMAL/WARNING/CRITICAL), `ThresholdEvent` dataclass, bounded queue, background dispatcher, subscriber level filtering, event history deque.
+
+4. **`monitoring/threshold_service.py`** (new) — Evaluates GPU power against TDP thresholds (< 70% = OPTIMAL, 70-80% = WARNING, >= 80% = CRITICAL), publishes to EventBus on state change.
+
+5. **`monitoring/monitor_service.py`** (modified) — New endpoints: `GET /metrics/threshold`, `GET /metrics/events?n=50`. New CLI args: `--sampling-rate`, `--tdp-watts`, `--enable-threshold`.
+
+6. **`kubernetes/controller.py`** (modified) — Propagate sampling_rate, tdp_watts, enable_threshold as container env vars. New `collect_threshold_events()` method.
+
+7. **`kai_cli.py`** (modified) — Add `--sampling-rate` to benchmark subparser.
+
+8. **`tests/test_phase20.py`** — ~15 tests covering sampling, ring buffer, trapezoidal energy, event bus, threshold classification.
+
+---
+
+### Phase 21: Dynamic Energy-Aware Scheduling (DEAS)
+
+**Goal:** Enable runtime chunk migration between nodes based on energy metrics, with automatic rebalancing when GPUs exceed power thresholds.
+
+**Tasks:**
+
+1. **`monitoring/metrics.py`** (modified) — Add `energy_efficiency_ratio` (EER = throughput / avg_power) to `compute_summary()` output.
+
+2. **`proto/inference.proto`** (modified) — Add `Pause`, `Checkpoint`, `Resume` RPCs with corresponding request/response messages.
+
+3. **`model/chunk_server.py`** (modified) — Implement `Pause()` (sets `_paused`), `Checkpoint()` (saves weights + hidden state), `Resume()` (restores + unpauses). Guard `Infer()` against paused state.
+
+4. **`model/gateway.py`** (modified) — Add `_chain_lock` for thread-safe inference, `update_chunk_host()` for live stub replacement, `get_chain_topology()`. New HTTP endpoints: `POST /relink`, `GET /topology`.
+
+5. **`model/deas_scheduler.py`** (new) — `DEASScheduler` subscribes to CRITICAL events, enforces cooldown, plans migrations (diff current vs optimal partition), executes 5-step migration workflow (Pause → Checkpoint → Migrate → Relink → Resume).
+
+6. **`kubernetes/controller.py`** (modified) — `start_deas()`, `stop_deas()`, `get_node_energy_profiles()`, `trigger_rebalance()` methods.
+
+7. **`tests/test_phase21.py`** — ~19 tests covering EER, DEAS scheduler, migration RPCs, gateway relinking.
+
+---
+
+### Phase 22: FlexGen-Style CPU Offloading
+
+**Goal:** Enable models exceeding total cluster VRAM to run by spilling weights to System RAM and disk, with double-buffered prefetching to hide transfer latency.
+
+**Tasks:**
+
+1. **`model/tiered_weight_manager.py`** (new) — `StorageTier` enum (GPU_VRAM/SYSTEM_RAM/DISK_SWAP), `TieredWeightManager` with `plan_placement()` (fill GPU first, then RAM, then disk), `store_layer_to_disk()` (safetensors format), `load_layer_from_disk()`, `promote_layer()`, `demote_layer()`.
+
+2. **`model/prefetch_engine.py`** (new) — Double-buffered prefetcher with `prefetch_layer()` (non-blocking background thread), `wait_and_swap()` (blocks + swaps buffers), timing stats (prefetch_ms, swap_ms, gpu_idle_ms, overlap_pct).
+
+3. **`model/layer_chunker.py`** (modified) — Add `create_offloaded_chunks()` method returning `(chunks, weight_manager, prefetch_engine)`.
+
+4. **`model/generation.py`** (modified) — Add `prefetch_engine` and `weight_manager` params to `DistributedGenerator`. New `_forward_all_chunks_offloaded()` method that prefetches chunk N+1 while computing chunk N.
+
+5. **`kai_cli.py`** (modified) — Add `--offload`, `--gpu-budget-mb`, `--disk-swap-dir` to `run` subparser.
+
+6. **`tests/test_phase22.py`** — ~14 tests covering tiered weights, prefetch engine, offloaded generation, CLI flags.
+
+---
+
+### Phase 23: Integrated Validation & Energy-Efficiency Analysis
+
+**Goal:** Add migration energy analysis, offloading overhead comparison, new visualization plots, and dashboard panels.
+
+**Tasks:**
+
+1. **`analysis/analyzer.py`** (modified) — Add `compute_migration_energy()` (trapezoidal integration over migration window), `compute_offloading_overhead()` (baseline vs offloaded latency comparison), `analyse_deas()` (migration history, cluster EER). Update `analyse_k8s()` with `migration_count` and `cluster_eer` keys.
+
+2. **`analysis/plots.py`** (modified) — Add `plot_migration_energy_impact()` (power timeline with migration windows shaded) and `plot_vram_ram_tradeoff()` (grouped bar chart of GPU vs CPU execution time). Add both to `plot_all()`.
+
+3. **`dashboard/app.py`** (modified) — Add "Migration Energy Impact" panel (power timeline + event summary table) and "VRAM vs RAM Execution Trade-off" panel (grouped bar chart with memory saved annotations).
+
+4. **`tests/test_phase23.py`** — ~14 tests covering trigger latency, migration integrity, tiered transitions, energy recovery, analyzer methods, plot imports.
+
+---
+
 ## Updated Phase Dependency Graph
 
 ```
@@ -826,6 +931,14 @@ Phase 1-13  (Original KAI -- Energy Benchmarking)
           |             +-- Phase 18  (E2E CLI & Integration)
           |                    |
           |                    +-- Phase 19  (Gap Coverage & Production Readiness)
+          |                           |
+          |                           +-- Phase 20  (Real-Time Instrumentation & Event Bus)
+          |                                  |
+          |                                  +-- Phase 21  (Dynamic Energy-Aware Scheduling)
+          |                                         |
+          |                                         +-- Phase 22  (CPU/Disk Offloading)
+          |                                                |
+          |                                                +-- Phase 23  (Validation & Analysis)
 ```
 
 ---

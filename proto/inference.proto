@@ -11,6 +11,15 @@ service InferenceService {
 
   // Lightweight health / readiness probe.
   rpc HealthCheck (HealthRequest) returns (HealthResponse);
+
+  // Pause inference on this chunk (reject new Infer calls).
+  rpc Pause (PauseRequest) returns (PauseResponse);
+
+  // Checkpoint hidden state + weights to disk for migration.
+  rpc Checkpoint (CheckpointRequest) returns (CheckpointResponse);
+
+  // Restore hidden state from checkpoint and unpause.
+  rpc Resume (ResumeRequest) returns (ResumeResponse);
 }
 
 message InferRequest {
@@ -61,4 +70,35 @@ message HealthResponse {
 
   // Human-readable status message.
   string status = 3;
+}
+
+// --- Migration RPCs (Phase 21) ---
+
+message PauseRequest {}
+
+message PauseResponse {
+  bool success = 1;
+  string status = 2;
+}
+
+message CheckpointRequest {
+  // Directory path where hidden state and weights should be saved.
+  string output_path = 1;
+}
+
+message CheckpointResponse {
+  bool success = 1;
+  string checkpoint_path = 2;
+  int64 size_bytes = 3;
+  float checkpoint_time_ms = 4;
+}
+
+message ResumeRequest {
+  // Path to checkpoint to restore from.
+  string checkpoint_path = 1;
+}
+
+message ResumeResponse {
+  bool success = 1;
+  string status = 2;
 }
