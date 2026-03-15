@@ -287,9 +287,10 @@ def cmd_benchmark(args):
 
 def cmd_dashboard(args):
     """Launch the Streamlit dashboard."""
-    print("[KAI] Launching dashboard...")
+    app_file = "dashboard/app.py" if getattr(args, "legacy", False) else "dashboard/unified_app.py"
+    print(f"[KAI] Launching dashboard ({os.path.basename(app_file)})...")
     cmd = [
-        sys.executable, "-m", "streamlit", "run", "dashboard/app.py",
+        sys.executable, "-m", "streamlit", "run", app_file,
         "--server.headless", "true",
         "--server.port", str(args.port),
     ]
@@ -577,6 +578,8 @@ def main():
     # --- dashboard ---
     dash_parser = subparsers.add_parser("dashboard", help="Launch Streamlit dashboard")
     dash_parser.add_argument("--port", type=int, default=8501)
+    dash_parser.add_argument("--legacy", action="store_true",
+                             help="Launch the legacy analysis-only dashboard")
     dash_parser.set_defaults(func=cmd_dashboard)
 
     # --- build ---
