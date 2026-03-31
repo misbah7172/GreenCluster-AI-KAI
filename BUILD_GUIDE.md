@@ -35,7 +35,19 @@ project/
 │   ├── auto_partitioner.py   # Smart layer-to-node assignment
 │   ├── deas_scheduler.py     # Dynamic Energy-Aware Scheduler (Phase 21)
 │   ├── tiered_weight_manager.py  # GPU/RAM/Disk tiered weight placement (Phase 22)
-│   └── prefetch_engine.py    # Double-buffered async weight prefetching (Phase 22)
+│   ├── prefetch_engine.py    # Double-buffered async weight prefetching (Phase 22)
+│   │
+│   │   # === NEXT-GEN FEATURES (Phase 24) ===
+│   ├── plugin_architecture.py    # Modular plugin system with registry
+│   ├── adaptive_precision.py     # Dynamic precision based on layer criticality
+│   ├── kv_cache_optimizer.py     # Mixed-precision KV cache with reuse
+│   ├── intelligent_placement.py  # Multi-objective placement optimization
+│   ├── network_aware_scheduler.py # Enhanced DEAS with network awareness
+│   ├── hybrid_parallelism.py     # Pipeline + tensor parallelism engine
+│   ├── energy_feedback_loop.py   # PID-based energy optimization
+│   ├── speculative_decoder.py    # Draft model speculation with verification
+│   ├── fault_tolerant_pipeline.py # Failure detection and recovery
+│   └── auto_tuner.py             # Auto-tuning benchmark system
 │
 ├── monitoring/               # Power and performance monitoring
 │   ├── __init__.py
@@ -90,7 +102,8 @@ project/
 │   ├── test_phase20.py       # ~15 tests (Phase 20)
 │   ├── test_phase21.py       # ~19 tests (Phase 21)
 │   ├── test_phase22.py       # ~14 tests (Phase 22)
-│   └── test_phase23.py       # ~14 tests (Phase 23)
+│   ├── test_phase23.py       # ~14 tests (Phase 23)
+│   └── test_nextgen_features.py  # ~40 tests (Phase 24: next-gen features)
 │
 ├── requirements.txt
 ├── BUILD_GUIDE.md
@@ -914,6 +927,44 @@ Phase 1  (Scaffolding)
 
 ---
 
+### Phase 24: Next-Generation Features
+
+**Goal:** Implement 10 advanced features to improve efficiency, scalability, and intelligence without reducing model output quality.
+
+**Tasks:**
+
+1. **`model/plugin_architecture.py`** (new) — Modular plugin system with `PluginRegistry` for registering and retrieving plugins by category (scheduler, optimizer, executor, cache, placement, parallelism). Base plugin interfaces: `SchedulerPlugin`, `OptimizerPlugin`, `ExecutorPlugin`, `CachePlugin`, `PlacementPlugin`, `ParallelismPlugin`. Default implementations for each.
+
+2. **`model/adaptive_precision.py`** (new) — `AdaptivePrecisionController` with `analyze_model()` for layer criticality analysis, `PrecisionLevel` enum (FP32, FP16, INT8, INT4), `get_precision_for_layer()` based on criticality and pressure, `apply_precision()` to dynamically apply precision per layer.
+
+3. **`model/kv_cache_optimizer.py`** (new) — `MixedPrecisionKVCache` (FP16 recent tokens, INT8 older tokens), `QuantizedTensor` class with scale/zero_point, `CacheReuser` for prompt overlap detection, `KVCacheOptimizer` high-level interface with memory-aware eviction.
+
+4. **`model/intelligent_placement.py`** (new) — `IntelligentPlacementEngine` with multi-objective optimization (`_optimize_latency`, `_optimize_energy`, `_optimize_memory`, `_optimize_balanced`), `NetworkTopology` for inter-node latency/bandwidth, `LayerInfo`, `PlacementAssignment`, `PlacementPlan` dataclasses.
+
+5. **`model/network_aware_scheduler.py`** (new) — `NetworkAwareScheduler` extending `DEASScheduler`, `NetworkMonitor` for continuous latency/bandwidth measurement, `compute_network_aware_plan()` that groups layers to minimize inter-node transfers.
+
+6. **`model/hybrid_parallelism.py`** (new) — `HybridParallelismEngine` with `ParallelismMode` enum (PIPELINE_ONLY, TENSOR_ONLY, HYBRID), `AttentionParallel` and `FeedForwardParallel` wrappers for tensor parallelism, `WorkloadAnalyzer.recommend_mode()` for automatic strategy selection.
+
+7. **`model/energy_feedback_loop.py`** (new) — `EnergyFeedbackController` with PID controllers for power and latency targets, `ControlConfig` dataclass (batch_size, power_limit, precision, offload_threshold), `PowerLimitManager` for NVML power limit control.
+
+8. **`model/speculative_decoder.py`** (new) — `SpeculativeDecoder` with `DraftModelWrapper`, `VerificationMode` enum (STRICT, THRESHOLD, SAMPLING), rejection sampling for mathematically exact output, `AdaptiveSpeculativeDecoder` that adjusts speculation length.
+
+9. **`model/fault_tolerant_pipeline.py`** (new) — `FaultTolerantPipeline` wrapping `InferenceGateway`, `FailureDetector` with health monitoring, `CheckpointManager` for recovery, `LayerReassigner` for failover.
+
+10. **`model/auto_tuner.py`** (new) — `AutoTuner` with `ConfigurationSpace`, `BenchmarkRunner`, `TrialResult`, `TuningResult`. Search strategies: `RandomSearch`, `GridSearch`, `BayesianSearch`. `TuningObjective` enum (LATENCY, THROUGHPUT, ENERGY_EFFICIENCY, MEMORY, BALANCED).
+
+11. **`kai_cli.py`** (modified) — Add 7 new subcommands: `autotune`, `speculative`, `hybrid`, `placement`, `energy-loop`, `fault-tolerant`, `plugins`.
+
+12. **`tests/test_nextgen_features.py`** (new) — ~40 tests covering all 10 new modules.
+
+**Deliverables:**
+- 10 new modules implementing next-generation features
+- 7 new CLI commands
+- ~40 new tests
+- Updated documentation
+
+---
+
 ## Updated Phase Dependency Graph
 
 ```
@@ -939,6 +990,8 @@ Phase 1-13  (Original KAI -- Energy Benchmarking)
           |                                         +-- Phase 22  (CPU/Disk Offloading)
           |                                                |
           |                                                +-- Phase 23  (Validation & Analysis)
+          |                                                       |
+          |                                                       +-- Phase 24  (Next-Gen Features)
 ```
 
 ---

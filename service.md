@@ -14,6 +14,65 @@ KAI is a **distributed AI inference platform** that lets you run large language 
 
 ---
 
+## Next-Generation Features (NEW)
+
+### Hybrid Parallelism Engine
+- **Combines pipeline and tensor parallelism** — splits attention layers across multiple GPUs (tensor parallel) while keeping feed-forward layers in sequential pipeline mode.
+- **Dynamic mode switching** — automatically selects pipeline-only, tensor-only, or hybrid mode based on workload characteristics and cluster resources.
+- **CLI**: `python kai_cli.py hybrid --model <model> --prompt "text" --mode auto`
+
+### Intelligent Model Placement
+- **Multi-objective optimization** — considers GPU VRAM, CPU RAM, network latency, and energy efficiency (EER) when assigning layers to nodes.
+- **Avoids network bottlenecks** — ensures consecutive layers with high activation transfer are placed on well-connected nodes.
+- **CLI**: `python kai_cli.py placement --model <model> --objective balanced`
+
+### KV Cache Optimization (TurboQuant-style)
+- **Mixed-precision cache** — stores recent tokens in FP16 for fast access, older tokens in INT8/compressed format to save memory.
+- **Cache reuse** — detects overlapping prompts across requests and reuses cached KV states.
+- **Memory-aware eviction** — intelligently evicts entries based on memory pressure and access patterns.
+
+### Network-Aware Scheduling
+- **Tracks inter-node latency and bandwidth** — continuously monitors network performance between nodes.
+- **Groups dependent layers** — places layers with high activation transfer on nearby nodes to minimize network overhead.
+- **Extends existing DEAS** — enhances the Dynamic Energy-Aware Scheduler with network awareness.
+
+### Energy Feedback Control Loop
+- **PID-based optimization** — uses proportional-integral-derivative control to minimize energy per token.
+- **Dynamic adjustment** — automatically tunes batch size, GPU power limits, precision strategy, and offloading thresholds.
+- **Maintains quality** — optimizes for energy efficiency without degrading output accuracy.
+- **CLI**: `python kai_cli.py energy-loop --power-target 100 --latency-target 50 --daemon`
+
+### Speculative Decoding
+- **Draft model speculation** — uses a smaller, faster model to generate candidate tokens ahead of the main model.
+- **Verification with rejection sampling** — main model verifies candidates, accepting correct ones and rejecting incorrect ones.
+- **Mathematically identical output** — no change in final output quality, just faster inference.
+- **CLI**: `python kai_cli.py speculative --model <model> --prompt "text" --speculation-length 5`
+
+### Fault-Tolerant Pipeline
+- **Automatic failure detection** — monitors node health and detects failures mid-inference.
+- **Checkpoint-based recovery** — resumes from the last checkpoint without output corruption.
+- **Layer reassignment** — dynamically moves layers from failed nodes to healthy ones.
+- **CLI**: `python kai_cli.py fault-tolerant --model <model> --prompt "text"`
+
+### Adaptive Precision Controller
+- **Layer criticality analysis** — identifies which layers are most sensitive to quantization.
+- **Dynamic precision** — applies FP16 to critical layers, INT8/INT4 to non-critical layers.
+- **Pressure-aware** — adjusts precision based on memory pressure and power usage.
+
+### Auto-Tuning Benchmark System
+- **Multi-strategy search** — supports random, grid, and Bayesian optimization.
+- **Configuration space** — tests partition strategies, precision modes, batch sizes, offloading settings.
+- **Optimal config selection** — outputs the best configuration for energy efficiency, latency, or throughput.
+- **CLI**: `python kai_cli.py autotune --model <model> --objective energy --max-trials 20`
+
+### Modular Plugin Architecture
+- **Pluggable subsystems** — scheduler, optimizer, executor, cache, placement, and parallelism are all replaceable.
+- **Registry-based** — register custom implementations via `@PluginRegistry.register` decorator.
+- **Easy strategy swapping** — switch between algorithms without code changes.
+- **CLI**: `python kai_cli.py plugins --action list`
+
+---
+
 ## Energy-Efficient Inference (Core Value)
 
 A key advantage of KAI is **reducing power consumption while producing identical output**.
@@ -148,6 +207,18 @@ This means a LLaMA 7B model (~14 GB in fp16) can be reduced to ~3.5 GB in 4-bit 
 | `kai_cli.py build` | Build Docker images for chunk/gateway/monitor |
 | `kai_cli.py prepare` | Download model, chunk weights, save for K8s deployment |
 
+### Next-Generation Commands
+
+| Command | What It Does |
+|---------|-------------|
+| `kai_cli.py autotune` | Auto-tune configuration for optimal performance |
+| `kai_cli.py speculative` | Run with speculative decoding (faster inference) |
+| `kai_cli.py hybrid` | Run with hybrid parallelism (tensor + pipeline) |
+| `kai_cli.py placement` | Generate intelligent placement plan |
+| `kai_cli.py energy-loop` | Start energy feedback control loop |
+| `kai_cli.py fault-tolerant` | Run with fault-tolerant pipeline |
+| `kai_cli.py plugins` | List and manage plugins |
+
 ---
 
 ## Supported Model Families
@@ -172,7 +243,7 @@ Any HuggingFace `AutoModelForCausalLM` architecture is supported.
 
 ## Test Coverage
 
-- **~140 integration tests** — all passing
+- **~180 integration tests** — all passing
   - 25 tests for energy benchmarking (Phases 1-13)
   - 30 tests for distributed inference (Phases 14-18)
   - 27 tests for gap coverage & production readiness (Phase 19)
@@ -180,6 +251,7 @@ Any HuggingFace `AutoModelForCausalLM` architecture is supported.
   - ~19 tests for dynamic scheduling & migration (Phase 21)
   - ~14 tests for CPU/disk offloading & prefetching (Phase 22)
   - ~14 tests for validation & energy analysis (Phase 23)
+  - **~40 tests for next-gen features (Phase 24)** — plugin architecture, adaptive precision, KV cache, intelligent placement, network-aware scheduling, hybrid parallelism, energy feedback loop, speculative decoding, fault tolerance, auto-tuning
 
 ---
 
@@ -279,8 +351,14 @@ KAI's quantization is simpler (NF4 or INT8 only), but it combines with distribut
 | CPU/disk offloading for models exceeding VRAM | |
 | Dynamic energy-aware scheduling with live migration | |
 | Real-time power threshold alerts via event bus | |
+| **Hybrid parallelism** (pipeline + tensor) | |
+| **Speculative decoding** for faster inference | |
+| **Auto-tuning** finds optimal configuration | |
+| **Fault-tolerant** recovery from node failures | |
+| **Intelligent placement** optimizes layer-to-node mapping | |
+| **Energy feedback loop** minimizes power consumption | |
 
-**KAI is best when:** You have 2+ low-end PCs with small GPUs, you want to run a model that doesn't fit on any single one, you want **lower power consumption** than a single high-end GPU, and you want provable energy metrics. Or: you have a single machine with limited VRAM and want offloading to RAM/disk.
+**KAI is best when:** You have 2+ low-end PCs with small GPUs, you want to run a model that doesn't fit on any single one, you want **lower power consumption** than a single high-end GPU, and you want provable energy metrics. Or: you have a single machine with limited VRAM and want offloading to RAM/disk. Or: you need advanced features like speculative decoding, hybrid parallelism, or fault tolerance.
 
 **KAI is NOT best when:** You need maximum speed above all else, need production throughput, want zero-setup local chat, or only have one machine with no offloading needs.
 

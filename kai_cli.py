@@ -7,13 +7,23 @@ enough VRAM/RAM for the full model.
 
 Subcommands::
 
-    kai run       — Download a model, partition across cluster, generate text.
-    kai scan      — Detect cluster resources and show capabilities.
-    kai partition — Preview how a model would be split (dry-run).
-    kai benchmark — Run the original energy benchmarking workflow.
-    kai dashboard — Launch the Streamlit dashboard.
-    kai build     — Build Docker images for chunk/gateway/monitor.
-    kai prepare   — Download model, chunk weights, save for K8s deployment.
+    kai run           — Download a model, partition across cluster, generate text.
+    kai scan          — Detect cluster resources and show capabilities.
+    kai partition     — Preview how a model would be split (dry-run).
+    kai benchmark     — Run the original energy benchmarking workflow.
+    kai dashboard     — Launch the Streamlit dashboard.
+    kai build         — Build Docker images for chunk/gateway/monitor.
+    kai prepare       — Download model, chunk weights, save for K8s deployment.
+
+Next-Generation Features::
+
+    kai autotune      — Auto-tune configuration for optimal performance.
+    kai speculative   — Run with speculative decoding for faster inference.
+    kai hybrid        — Run with hybrid parallelism (tensor + pipeline).
+    kai placement     — Generate intelligent placement plan.
+    kai energy-loop   — Start the energy feedback control loop.
+    kai fault-tolerant — Run with fault-tolerant pipeline.
+    kai plugins       — List and manage plugins.
 
 Usage::
 
@@ -24,6 +34,8 @@ Usage::
     python kai_cli.py dashboard
     python kai_cli.py build --tag kai:latest
     python kai_cli.py prepare --model sshleifer/tiny-gpt2 --num-chunks 3
+    python kai_cli.py autotune --model sshleifer/tiny-gpt2 --objective energy
+    python kai_cli.py speculative --model sshleifer/tiny-gpt2 --prompt "Hello"
 """
 
 import argparse
@@ -338,6 +350,341 @@ def cmd_build(args):
     print("[KAI] All images built successfully.")
 
 
+def cmd_autotune(args):
+    """Auto-tune configuration for optimal performance."""
+    from model.auto_tuner import AutoTuner, TuningObjective, ConfigurationSpace
+    from model.hf_loader import HFModelLoader
+    from model.resource_detector import ResourceDetector
+
+    print(f"[KAI] Starting auto-tuning for: {args.model}")
+    print(f"[KAI] Objective: {args.objective}")
+    print(f"[KAI] Max trials: {args.max_trials}")
+
+    loader = HFModelLoader(
+        args.model,
+        dtype=args.dtype,
+        trust_remote_code=args.trust_remote_code,
+        token=args.token,
+    )
+
+    detector = ResourceDetector(mode=args.resource_mode)
+    nodes = detector.scan()
+
+    config_space = ConfigurationSpace(
+        num_chunks_range=(1, max(8, len(nodes))),
+        precision_options=["fp32", "fp16", "int8", "int4"] if args.all_precisions else ["fp16", "int8"],
+        batch_size_values=[1, 2, 4, 8, 16, 32] if args.batch_range else [1, 4, 16],
+    )
+
+    tuner = AutoTuner(
+        loader, nodes,
+        config_space=config_space,
+        output_dir=args.output_dir,
+    )
+
+    objective_map = {
+        "latency": TuningObjective.LATENCY,
+        "throughput": TuningObjective.THROUGHPUT,
+        "energy": TuningObjective.ENERGY_EFFICIENCY,
+        "memory": TuningObjective.MEMORY,
+        "balanced": TuningObjective.BALANCED,
+    }
+
+    result = tuner.tune(
+        objective=objective_map.get(args.objective, TuningObjective.BALANCED),
+        max_trials=args.max_trials,
+        search_strategy=args.strategy,
+        timeout_s=args.timeout if args.timeout > 0 else None,
+    )
+
+    print()
+    print(result.summary())
+    print()
+    print(f"[KAI] Results saved to: {args.output_dir}")
+
+
+def cmd_speculative(args):
+    """Run inference with speculative decoding."""
+    from model.hf_loader import HFModelLoader
+    from model.layer_chunker import LayerChunker
+    from model.resource_detector import ResourceDetector
+    from model.speculative_decoder import AdaptiveSpeculativeDecoder, VerificationMode
+
+    print(f"[KAI] Loading main model: {args.model}")
+    loader = HFModelLoader(
+        args.model,
+        dtype=args.dtype,
+        trust_remote_code=args.trust_remote_code,
+        token=args.token,
+    )
+
+    # Scan resources
+    detector = ResourceDetector(mode=args.resource_mode)
+    nodes = detector.scan()
+    num_chunks = args.num_chunks or len(nodes)
+
+    print(f"[KAI] Partitioning into {num_chunks} chunks...")
+    chunker = LayerChunker(loader)
+    chunks = chunker.create_chunks(num_chunks)
+
+    print("[KAI] Loading weights...")
+    _load_real_weights(loader, chunks, args.device, quantize=args.quantize)
+
+    # Load draft model if specified
+    draft_model = None
+    if args.draft_model:
+        print(f"[KAI] Loading draft model: {args.draft_model}")
+        from transformers import AutoModelForCausalLM
+        draft_model = AutoModelForCausalLM.from_pretrained(
+            args.draft_model,
+            torch_dtype=loader.torch_dtype,
+            trust_remote_code=args.trust_remote_code,
+            token=args.token,
+        )
+        draft_model.to(args.device)
+        draft_model.eval()
+
+    tokenizer = loader.get_tokenizer()
+
+    verification_modes = {
+        "strict": VerificationMode.STRICT,
+        "threshold": VerificationMode.THRESHOLD,
+        "sampling": VerificationMode.SAMPLING,
+    }
+
+    speculative = AdaptiveSpeculativeDecoder(
+        chunks=chunks,
+        tokenizer=tokenizer,
+        draft_model=draft_model,
+        speculation_length=args.speculation_length,
+        verification_mode=verification_modes.get(args.verification, VerificationMode.STRICT),
+        device=args.device,
+    )
+
+    print(f"[KAI] Speculative generation (speculation_length={args.speculation_length})...")
+    print("---")
+
+    tokens = speculative.generate(
+        prompt=args.prompt,
+        max_new_tokens=args.max_tokens,
+        temperature=args.temperature,
+    )
+
+    result = tokenizer.decode(tokens, skip_special_tokens=True)
+    print(result)
+    print("---")
+
+    stats = speculative.get_stats()
+    print(f"[KAI] Acceptance rate: {stats['acceptance_rate']:.1%}")
+    print(f"[KAI] Avg speculation length: {stats['avg_speculation_length']:.1f}")
+    print("[KAI] Done.")
+
+
+def cmd_hybrid(args):
+    """Run inference with hybrid parallelism."""
+    from model.hf_loader import HFModelLoader
+    from model.layer_chunker import LayerChunker
+    from model.resource_detector import ResourceDetector
+    from model.hybrid_parallelism import HybridParallelismEngine, ParallelismMode
+
+    print(f"[KAI] Loading model: {args.model}")
+    loader = HFModelLoader(
+        args.model,
+        dtype=args.dtype,
+        trust_remote_code=args.trust_remote_code,
+        token=args.token,
+    )
+
+    detector = ResourceDetector(mode=args.resource_mode)
+    nodes = detector.scan()
+
+    print(f"[KAI] Setting up hybrid parallelism (mode={args.mode})...")
+
+    mode_map = {
+        "auto": None,  # Auto-detect
+        "pipeline": ParallelismMode.PIPELINE_ONLY,
+        "tensor": ParallelismMode.TENSOR_ONLY,
+        "hybrid": ParallelismMode.HYBRID,
+    }
+
+    engine = HybridParallelismEngine(
+        loader,
+        nodes,
+        mode=mode_map.get(args.mode),
+        tensor_parallel_size=args.tensor_parallel,
+    )
+
+    tokenizer = loader.get_tokenizer()
+    input_ids = tokenizer.encode(args.prompt, return_tensors="pt")
+
+    print("[KAI] Running inference...")
+    print("---")
+
+    output = engine.forward(input_ids.to(args.device))
+    output_ids = output.argmax(dim=-1)
+    result = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    print(result)
+    print("---")
+
+    print(f"[KAI] Parallelism mode used: {engine.mode.value}")
+    print("[KAI] Done.")
+
+
+def cmd_placement(args):
+    """Generate intelligent placement plan."""
+    from model.hf_loader import HFModelLoader
+    from model.resource_detector import ResourceDetector
+    from model.intelligent_placement import IntelligentPlacementEngine, OptimizationObjective
+
+    print(f"[KAI] Loading model config: {args.model}")
+    loader = HFModelLoader(
+        args.model,
+        dtype=args.dtype,
+        trust_remote_code=args.trust_remote_code,
+        token=args.token,
+    )
+
+    print(f"[KAI] Scanning resources (mode={args.resource_mode})...")
+    detector = ResourceDetector(mode=args.resource_mode)
+    nodes = detector.scan()
+
+    objective_map = {
+        "latency": OptimizationObjective.LATENCY,
+        "energy": OptimizationObjective.ENERGY,
+        "memory": OptimizationObjective.MEMORY,
+        "balanced": OptimizationObjective.BALANCED,
+    }
+
+    engine = IntelligentPlacementEngine(
+        nodes,
+        objective=objective_map.get(args.objective, OptimizationObjective.BALANCED),
+    )
+
+    print(f"[KAI] Generating placement plan (objective={args.objective})...")
+    plan = engine.generate_plan(loader)
+
+    print()
+    print(plan.summary())
+    print()
+
+    if args.output:
+        import json
+        with open(args.output, "w") as f:
+            json.dump(plan.to_dict(), f, indent=2)
+        print(f"[KAI] Plan saved to: {args.output}")
+
+
+def cmd_energy_loop(args):
+    """Start the energy feedback control loop."""
+    from model.energy_feedback_loop import EnergyFeedbackController
+
+    print("[KAI] Starting energy feedback control loop...")
+    print(f"[KAI] Power target: {args.power_target}W")
+    print(f"[KAI] Latency target: {args.latency_target}ms")
+
+    controller = EnergyFeedbackController(
+        power_target_w=args.power_target,
+        latency_target_ms=args.latency_target,
+        update_interval=args.interval,
+    )
+
+    if args.daemon:
+        print("[KAI] Running in daemon mode (Ctrl+C to stop)...")
+        try:
+            controller.run_forever()
+        except KeyboardInterrupt:
+            print("\n[KAI] Stopping control loop...")
+            controller.stop()
+    else:
+        print("[KAI] Running single control step...")
+        config = controller.step()
+        print(f"[KAI] Recommended config: {config}")
+
+
+def cmd_fault_tolerant(args):
+    """Run with fault-tolerant pipeline."""
+    from model.hf_loader import HFModelLoader
+    from model.layer_chunker import LayerChunker
+    from model.resource_detector import ResourceDetector
+    from model.fault_tolerant_pipeline import FaultTolerantPipeline
+
+    print(f"[KAI] Loading model: {args.model}")
+    loader = HFModelLoader(
+        args.model,
+        dtype=args.dtype,
+        trust_remote_code=args.trust_remote_code,
+        token=args.token,
+    )
+
+    detector = ResourceDetector(mode=args.resource_mode)
+    nodes = detector.scan()
+    num_chunks = args.num_chunks or len(nodes)
+
+    print(f"[KAI] Partitioning into {num_chunks} chunks...")
+    chunker = LayerChunker(loader)
+    chunks = chunker.create_chunks(num_chunks)
+
+    print("[KAI] Loading weights...")
+    _load_real_weights(loader, chunks, args.device, quantize=args.quantize)
+
+    print("[KAI] Setting up fault-tolerant pipeline...")
+    pipeline = FaultTolerantPipeline(
+        chunks=chunks,
+        nodes=nodes,
+        checkpoint_interval=args.checkpoint_interval,
+        checkpoint_dir=args.checkpoint_dir,
+        health_check_interval=args.health_interval,
+    )
+
+    tokenizer = loader.get_tokenizer()
+    input_ids = tokenizer.encode(args.prompt, return_tensors="pt")
+
+    print("[KAI] Running inference with fault tolerance...")
+    print("---")
+
+    output = pipeline.forward(input_ids.to(args.device))
+    output_ids = output.argmax(dim=-1)
+    result = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    print(result)
+    print("---")
+
+    stats = pipeline.get_stats()
+    print(f"[KAI] Checkpoints created: {stats['checkpoints_created']}")
+    print(f"[KAI] Failures detected: {stats['failures_detected']}")
+    print(f"[KAI] Recoveries: {stats['recoveries']}")
+    print("[KAI] Done.")
+
+
+def cmd_plugins(args):
+    """List and manage plugins."""
+    from model.plugin_architecture import PluginRegistry
+
+    if args.action == "list":
+        print("[KAI] Registered Plugins:")
+        for category in ["scheduler", "optimizer", "executor", "cache", "placement", "parallelism"]:
+            plugins = PluginRegistry.list_plugins(category)
+            if plugins:
+                print(f"\n  {category}:")
+                for name in plugins:
+                    plugin = PluginRegistry.get(category, name)
+                    desc = getattr(plugin, "__doc__", "No description") or "No description"
+                    desc = desc.strip().split("\n")[0][:60]
+                    print(f"    - {name}: {desc}")
+    elif args.action == "info":
+        if not args.name:
+            print("[KAI] Error: --name required for info action")
+            return
+        plugin = PluginRegistry.get(args.category, args.name)
+        if plugin:
+            print(f"[KAI] Plugin: {args.name}")
+            print(f"  Category: {args.category}")
+            print(f"  Class: {plugin.__name__}")
+            doc = getattr(plugin, "__doc__", "No documentation")
+            print(f"  Documentation:\n{doc}")
+        else:
+            print(f"[KAI] Plugin not found: {args.category}/{args.name}")
+
+
 def cmd_prepare(args):
     """Download model, chunk weights, and save for K8s deployment."""
     from model.hf_loader import HFModelLoader
@@ -599,6 +946,120 @@ def main():
     prep_parser.add_argument("--quantize", default=None, choices=["4bit", "8bit"],
                              help="Quantize chunk weights (4bit NF4 or 8bit INT8)")
     prep_parser.set_defaults(func=cmd_prepare)
+
+    # --- autotune ---
+    autotune_parser = subparsers.add_parser("autotune", help="Auto-tune configuration for optimal performance")
+    autotune_parser.add_argument("--model", required=True, help="HuggingFace model name")
+    autotune_parser.add_argument("--objective", default="balanced",
+                                  choices=["latency", "throughput", "energy", "memory", "balanced"],
+                                  help="Optimization objective")
+    autotune_parser.add_argument("--max-trials", type=int, default=20, help="Maximum number of trials")
+    autotune_parser.add_argument("--strategy", default="bayesian",
+                                  choices=["random", "grid", "bayesian"],
+                                  help="Search strategy")
+    autotune_parser.add_argument("--timeout", type=float, default=0, help="Timeout in seconds (0=no timeout)")
+    autotune_parser.add_argument("--output-dir", default="./tuning_results", help="Output directory")
+    autotune_parser.add_argument("--dtype", default="float16", help="Weight dtype")
+    autotune_parser.add_argument("--resource-mode", default="local", choices=["local", "kubernetes"])
+    autotune_parser.add_argument("--trust-remote-code", action="store_true")
+    autotune_parser.add_argument("--token", default=None)
+    autotune_parser.add_argument("--all-precisions", action="store_true",
+                                  help="Test all precision options (fp32, fp16, int8, int4)")
+    autotune_parser.add_argument("--batch-range", action="store_true",
+                                  help="Test extended batch size range")
+    autotune_parser.set_defaults(func=cmd_autotune)
+
+    # --- speculative ---
+    spec_parser = subparsers.add_parser("speculative", help="Run with speculative decoding")
+    spec_parser.add_argument("--model", required=True, help="Main HuggingFace model name")
+    spec_parser.add_argument("--draft-model", default=None,
+                              help="Draft model for speculation (default: auto-created)")
+    spec_parser.add_argument("--prompt", required=True, help="Input prompt")
+    spec_parser.add_argument("--max-tokens", type=int, default=100, help="Max tokens to generate")
+    spec_parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
+    spec_parser.add_argument("--speculation-length", type=int, default=5,
+                              help="Number of tokens to speculate ahead")
+    spec_parser.add_argument("--verification", default="strict",
+                              choices=["strict", "threshold", "sampling"],
+                              help="Verification mode")
+    spec_parser.add_argument("--num-chunks", type=int, default=None)
+    spec_parser.add_argument("--dtype", default="float16")
+    spec_parser.add_argument("--device", default="cpu")
+    spec_parser.add_argument("--resource-mode", default="local", choices=["local", "kubernetes"])
+    spec_parser.add_argument("--trust-remote-code", action="store_true")
+    spec_parser.add_argument("--token", default=None)
+    spec_parser.add_argument("--quantize", default=None, choices=["4bit", "8bit"])
+    spec_parser.set_defaults(func=cmd_speculative)
+
+    # --- hybrid ---
+    hybrid_parser = subparsers.add_parser("hybrid", help="Run with hybrid parallelism")
+    hybrid_parser.add_argument("--model", required=True, help="HuggingFace model name")
+    hybrid_parser.add_argument("--prompt", required=True, help="Input prompt")
+    hybrid_parser.add_argument("--mode", default="auto",
+                                choices=["auto", "pipeline", "tensor", "hybrid"],
+                                help="Parallelism mode")
+    hybrid_parser.add_argument("--tensor-parallel", type=int, default=2,
+                                help="Tensor parallel size (GPUs per tensor group)")
+    hybrid_parser.add_argument("--dtype", default="float16")
+    hybrid_parser.add_argument("--device", default="cpu")
+    hybrid_parser.add_argument("--resource-mode", default="local", choices=["local", "kubernetes"])
+    hybrid_parser.add_argument("--trust-remote-code", action="store_true")
+    hybrid_parser.add_argument("--token", default=None)
+    hybrid_parser.set_defaults(func=cmd_hybrid)
+
+    # --- placement ---
+    place_parser = subparsers.add_parser("placement", help="Generate intelligent placement plan")
+    place_parser.add_argument("--model", required=True, help="HuggingFace model name")
+    place_parser.add_argument("--objective", default="balanced",
+                               choices=["latency", "energy", "memory", "balanced"],
+                               help="Optimization objective")
+    place_parser.add_argument("--output", default=None, help="Output file for placement plan (JSON)")
+    place_parser.add_argument("--dtype", default="float16")
+    place_parser.add_argument("--resource-mode", default="local", choices=["local", "kubernetes"])
+    place_parser.add_argument("--trust-remote-code", action="store_true")
+    place_parser.add_argument("--token", default=None)
+    place_parser.set_defaults(func=cmd_placement)
+
+    # --- energy-loop ---
+    energy_parser = subparsers.add_parser("energy-loop", help="Start energy feedback control loop")
+    energy_parser.add_argument("--power-target", type=float, default=100.0,
+                                help="Target power consumption in Watts")
+    energy_parser.add_argument("--latency-target", type=float, default=100.0,
+                                help="Target latency in milliseconds")
+    energy_parser.add_argument("--interval", type=float, default=1.0,
+                                help="Control loop update interval in seconds")
+    energy_parser.add_argument("--daemon", action="store_true",
+                                help="Run as daemon (continuous)")
+    energy_parser.set_defaults(func=cmd_energy_loop)
+
+    # --- fault-tolerant ---
+    ft_parser = subparsers.add_parser("fault-tolerant", help="Run with fault-tolerant pipeline")
+    ft_parser.add_argument("--model", required=True, help="HuggingFace model name")
+    ft_parser.add_argument("--prompt", required=True, help="Input prompt")
+    ft_parser.add_argument("--num-chunks", type=int, default=None)
+    ft_parser.add_argument("--checkpoint-interval", type=int, default=5,
+                            help="Checkpoint every N layers")
+    ft_parser.add_argument("--checkpoint-dir", default="/tmp/kai_checkpoints",
+                            help="Directory for checkpoints")
+    ft_parser.add_argument("--health-interval", type=float, default=5.0,
+                            help="Health check interval in seconds")
+    ft_parser.add_argument("--dtype", default="float16")
+    ft_parser.add_argument("--device", default="cpu")
+    ft_parser.add_argument("--resource-mode", default="local", choices=["local", "kubernetes"])
+    ft_parser.add_argument("--trust-remote-code", action="store_true")
+    ft_parser.add_argument("--token", default=None)
+    ft_parser.add_argument("--quantize", default=None, choices=["4bit", "8bit"])
+    ft_parser.set_defaults(func=cmd_fault_tolerant)
+
+    # --- plugins ---
+    plugins_parser = subparsers.add_parser("plugins", help="List and manage plugins")
+    plugins_parser.add_argument("--action", default="list", choices=["list", "info"],
+                                 help="Action to perform")
+    plugins_parser.add_argument("--category", default="scheduler",
+                                 choices=["scheduler", "optimizer", "executor", "cache", "placement", "parallelism"],
+                                 help="Plugin category")
+    plugins_parser.add_argument("--name", default=None, help="Plugin name (for info action)")
+    plugins_parser.set_defaults(func=cmd_plugins)
 
     args = parser.parse_args()
 

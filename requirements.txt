@@ -35,3 +35,9 @@ numpy>=1.26.0
 
 # Quantization (4-bit NF4, 8-bit INT8)
 bitsandbytes>=0.41.0
+
+# Testing
+pytest>=7.4.0
+
+# Note: Phase 24 next-gen features (hybrid parallelism, speculative decoding,
+# fault tolerance, auto-tuning, etc.) use only standard library and above deps.

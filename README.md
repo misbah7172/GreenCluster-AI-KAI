@@ -18,6 +18,19 @@ KAI is a platform that enables running **large AI models on clusters of low-end 
 - **Quantization** — Optional 4-bit (NF4) and 8-bit (INT8) quantization via bitsandbytes to reduce memory per chunk.
 - **Docker Build & Prepare** — `kai build` builds all Docker images; `kai prepare` downloads, chunks, and saves weights for K8s deployment.
 
+### Next-Generation Features (NEW)
+
+- **Hybrid Parallelism Engine** — Combines pipeline parallelism (existing) with tensor parallelism. Splits attention layers across GPUs while keeping feed-forward layers in pipeline mode. Dynamic mode switching based on workload.
+- **Intelligent Model Placement** — Multi-objective optimization for layer-to-node mapping considering GPU VRAM, CPU RAM, network latency, and energy efficiency (EER).
+- **KV Cache Optimization** — Mixed-precision KV cache (FP16 for recent tokens, INT8 for older tokens), cache reuse across requests with overlapping prompts, memory-aware eviction.
+- **Network-Aware Scheduling** — Enhanced DEAS with inter-node latency and bandwidth tracking. Groups dependent layers to minimize network transfers.
+- **Energy Feedback Control Loop** — PID-based closed-loop optimizer that dynamically adjusts batch size, GPU power limits, precision, and offloading thresholds to minimize energy per token.
+- **Speculative Decoding** — Uses a smaller draft model to generate candidate tokens, verified by the main model. Reduces latency with mathematically identical output.
+- **Fault-Tolerant Pipeline** — Automatic failure detection, checkpoint-based recovery, and layer reassignment to healthy nodes without output corruption.
+- **Adaptive Precision Controller** — Dynamic precision (FP16/INT8/INT4) based on layer criticality and memory/power pressure. No perceptible accuracy degradation.
+- **Auto-Tuning Benchmark System** — Automatically tests multiple configurations (partitions, precision, offloading) and finds optimal settings for energy, latency, or throughput.
+- **Modular Plugin Architecture** — Pluggable scheduler, optimizer, executor, and cache subsystems. Easy strategy swapping via registry.
+
 ### Quick Example
 
 ```bash
@@ -50,6 +63,29 @@ python kai_cli.py benchmark --hf-model sshleifer/tiny-gpt2 --mode local --sampli
 
 # Run with CPU/disk offloading for oversized models
 python kai_cli.py run --model sshleifer/tiny-gpt2 --prompt "Hello" --offload --gpu-budget-mb 2000
+
+# === NEXT-GEN FEATURES ===
+
+# Auto-tune to find optimal configuration
+python kai_cli.py autotune --model sshleifer/tiny-gpt2 --objective energy --max-trials 20
+
+# Run with speculative decoding for faster inference
+python kai_cli.py speculative --model sshleifer/tiny-gpt2 --prompt "Hello" --speculation-length 5
+
+# Run with hybrid parallelism (tensor + pipeline)
+python kai_cli.py hybrid --model sshleifer/tiny-gpt2 --prompt "Hello" --mode auto
+
+# Generate intelligent placement plan
+python kai_cli.py placement --model microsoft/phi-2 --objective balanced
+
+# Start energy feedback control loop
+python kai_cli.py energy-loop --power-target 100 --latency-target 50 --daemon
+
+# Run with fault-tolerant pipeline
+python kai_cli.py fault-tolerant --model sshleifer/tiny-gpt2 --prompt "Hello"
+
+# List available plugins
+python kai_cli.py plugins --action list
 ```
 
 ---
@@ -242,7 +278,19 @@ KAI/
 │   ├── auto_partitioner.py       #   Smart layer-to-node assignment
 │   ├── deas_scheduler.py         #   Dynamic Energy-Aware Scheduler (Phase 21)
 │   ├── tiered_weight_manager.py  #   GPU/RAM/Disk tiered weight placement (Phase 22)
-│   └── prefetch_engine.py        #   Double-buffered async weight prefetching (Phase 22)
+│   ├── prefetch_engine.py        #   Double-buffered async weight prefetching (Phase 22)
+│   │
+│   │   # === NEXT-GEN FEATURES (Phase 24) ===
+│   ├── plugin_architecture.py    #   Modular plugin system with registry
+│   ├── adaptive_precision.py     #   Dynamic precision based on layer criticality
+│   ├── kv_cache_optimizer.py     #   Mixed-precision KV cache with reuse
+│   ├── intelligent_placement.py  #   Multi-objective placement optimization
+│   ├── network_aware_scheduler.py #  Enhanced DEAS with network awareness
+│   ├── hybrid_parallelism.py     #   Pipeline + tensor parallelism engine
+│   ├── energy_feedback_loop.py   #   PID-based energy optimization
+│   ├── speculative_decoder.py    #   Draft model speculation with verification
+│   ├── fault_tolerant_pipeline.py #  Failure detection and recovery
+│   └── auto_tuner.py             #   Auto-tuning benchmark system
 │
 ├── monitoring/                   # Power and performance monitoring
 │   ├── gpu_monitor.py            #   NVML-based GPU power/util/temp sampling (+ ring buffer, TDP)
@@ -287,7 +335,8 @@ KAI/
 │   ├── test_phase20.py           #   ~15 tests (Phase 20: instrumentation, event bus, thresholds)
 │   ├── test_phase21.py           #   ~19 tests (Phase 21: EER, DEAS, migration, relinking)
 │   ├── test_phase22.py           #   ~14 tests (Phase 22: tiered weights, prefetching, offloading)
-│   └── test_phase23.py           #   ~14 tests (Phase 23: validation, analysis, plots)
+│   ├── test_phase23.py           #   ~14 tests (Phase 23: validation, analysis, plots)
+│   └── test_nextgen_features.py  #   ~40 tests (Phase 24: next-gen features)
 │
 ├── logs/                         # Experiment output (JSON)
 ├── docs/                         # Phase documentation
@@ -656,6 +705,15 @@ Commands:
   dashboard    Launch the Streamlit dashboard
   build        Build Docker images for chunk/gateway/monitor
   prepare      Download model, chunk weights, save for K8s deployment
+
+Next-Gen Commands:
+  autotune      Auto-tune configuration for optimal performance
+  speculative   Run with speculative decoding for faster inference
+  hybrid        Run with hybrid parallelism (tensor + pipeline)
+  placement     Generate intelligent placement plan
+  energy-loop   Start energy feedback control loop
+  fault-tolerant Run with fault-tolerant pipeline
+  plugins       List and manage plugins
 ```
 
 #### `run` — Generate Text
@@ -734,6 +792,97 @@ python kai_cli.py dashboard [OPTIONS]
 Options:
   --port          Server port                       (default: 8501)
   --legacy        Launch the legacy analysis-only dashboard instead of the unified dashboard
+```
+
+### Next-Generation CLI Commands
+
+#### `autotune` — Auto-Tune Configuration
+
+```
+python kai_cli.py autotune --model <hf_model> [OPTIONS]
+
+Options:
+  --model           HuggingFace model name           (required)
+  --objective       latency | throughput | energy | memory | balanced (default: balanced)
+  --max-trials      Maximum tuning trials            (default: 20)
+  --strategy        random | grid | bayesian         (default: bayesian)
+  --timeout         Timeout in seconds               (default: 0 = no timeout)
+  --output-dir      Results directory                (default: ./tuning_results)
+  --all-precisions  Test all precision options (fp32, fp16, int8, int4)
+  --batch-range     Test extended batch size range
+```
+
+#### `speculative` — Speculative Decoding
+
+```
+python kai_cli.py speculative --model <hf_model> --prompt "text" [OPTIONS]
+
+Options:
+  --model              Main HuggingFace model        (required)
+  --draft-model        Draft model for speculation   (default: auto-created)
+  --prompt             Input prompt                   (required)
+  --max-tokens         Max tokens to generate         (default: 100)
+  --speculation-length Tokens to speculate ahead     (default: 5)
+  --verification       strict | threshold | sampling (default: strict)
+```
+
+#### `hybrid` — Hybrid Parallelism
+
+```
+python kai_cli.py hybrid --model <hf_model> --prompt "text" [OPTIONS]
+
+Options:
+  --model           HuggingFace model name           (required)
+  --prompt          Input prompt                      (required)
+  --mode            auto | pipeline | tensor | hybrid (default: auto)
+  --tensor-parallel Tensor parallel size (GPUs)      (default: 2)
+```
+
+#### `placement` — Intelligent Placement
+
+```
+python kai_cli.py placement --model <hf_model> [OPTIONS]
+
+Options:
+  --model           HuggingFace model name           (required)
+  --objective       latency | energy | memory | balanced (default: balanced)
+  --output          Output file for plan (JSON)
+```
+
+#### `energy-loop` — Energy Feedback Control
+
+```
+python kai_cli.py energy-loop [OPTIONS]
+
+Options:
+  --power-target    Target power consumption (W)     (default: 100.0)
+  --latency-target  Target latency (ms)              (default: 100.0)
+  --interval        Control loop interval (s)        (default: 1.0)
+  --daemon          Run continuously
+```
+
+#### `fault-tolerant` — Fault-Tolerant Pipeline
+
+```
+python kai_cli.py fault-tolerant --model <hf_model> --prompt "text" [OPTIONS]
+
+Options:
+  --model               HuggingFace model name       (required)
+  --prompt              Input prompt                  (required)
+  --checkpoint-interval Checkpoint every N layers    (default: 5)
+  --checkpoint-dir      Checkpoint directory         (default: /tmp/kai_checkpoints)
+  --health-interval     Health check interval (s)    (default: 5.0)
+```
+
+#### `plugins` — Plugin Management
+
+```
+python kai_cli.py plugins [OPTIONS]
+
+Options:
+  --action          list | info                      (default: list)
+  --category        scheduler | optimizer | executor | cache | placement | parallelism
+  --name            Plugin name (for info action)
 ```
 
 ### Experiment Runner (Detailed Benchmarking)

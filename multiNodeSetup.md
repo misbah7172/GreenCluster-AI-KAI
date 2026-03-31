@@ -332,3 +332,69 @@ kubectl logs -n kai deployment/kai-gateway
 - Check network bandwidth: `iperf3 -s` on one machine, `iperf3 -c <ip>` on the other
 - Consider enabling gRPC compression in gateway settings
 - Reduce chunk count to minimize network round-trips
+- **Use intelligent placement** (Phase 24): `python kai_cli.py placement --model <model> --objective latency`
+
+---
+
+## Next-Generation Features for Multi-Node Deployments
+
+KAI includes advanced features specifically designed for multi-node deployments:
+
+### Intelligent Model Placement
+Automatically optimizes layer-to-node mapping based on network topology:
+```bash
+# Generate optimal placement plan considering network latency
+python kai_cli.py placement --model microsoft/phi-2 --objective latency --output placement.json
+
+# Or optimize for energy efficiency
+python kai_cli.py placement --model microsoft/phi-2 --objective energy
+```
+
+### Network-Aware Scheduling
+Enhanced DEAS that considers inter-node latency and bandwidth:
+- Groups dependent layers on well-connected nodes
+- Avoids placing consecutive layers on high-latency links
+- Monitors network performance in real-time
+
+### Hybrid Parallelism
+For multi-GPU nodes, combine tensor and pipeline parallelism:
+```bash
+# Auto-detect optimal parallelism mode
+python kai_cli.py hybrid --model microsoft/phi-2 --prompt "Hello" --mode auto
+
+# Force tensor parallelism across GPUs on the same node
+python kai_cli.py hybrid --model microsoft/phi-2 --prompt "Hello" --mode tensor --tensor-parallel 2
+```
+
+### Fault-Tolerant Pipeline
+Automatically recovers from node failures:
+```bash
+# Run with automatic failure detection and recovery
+python kai_cli.py fault-tolerant --model sshleifer/tiny-gpt2 --prompt "Hello" \
+  --checkpoint-interval 5 --health-interval 5.0
+```
+
+### Speculative Decoding
+Faster inference with mathematically identical output:
+```bash
+# Use draft model to speed up inference
+python kai_cli.py speculative --model microsoft/phi-2 --prompt "Hello" \
+  --speculation-length 5 --verification strict
+```
+
+### Auto-Tuning
+Find optimal configuration for your cluster:
+```bash
+# Auto-tune for energy efficiency
+python kai_cli.py autotune --model sshleifer/tiny-gpt2 --objective energy --max-trials 20
+
+# Auto-tune for minimum latency
+python kai_cli.py autotune --model sshleifer/tiny-gpt2 --objective latency --strategy bayesian
+```
+
+### Energy Feedback Control
+Closed-loop optimization for power-constrained deployments:
+```bash
+# Start energy feedback controller
+python kai_cli.py energy-loop --power-target 100 --latency-target 50 --daemon
+```
