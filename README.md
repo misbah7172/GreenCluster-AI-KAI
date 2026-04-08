@@ -31,6 +31,18 @@ KAI is a platform that enables running **large AI models on clusters of low-end 
 - **Auto-Tuning Benchmark System** — Automatically tests multiple configurations (partitions, precision, offloading) and finds optimal settings for energy, latency, or throughput.
 - **Modular Plugin Architecture** — Pluggable scheduler, optimizer, executor, and cache subsystems. Easy strategy swapping via registry.
 
+### Advanced Algorithms (Phase 25)
+
+- **FCIM (Fair Cost-Efficient Analysis Mechanism)** — Multi-criteria worker selection balancing cost efficiency, performance, and fairness using Jain's Fairness Index.
+- **ADSA (Adaptive Dynamic Scheduling Algorithm)** — Dynamic task reordering based on arrival time, size, and priority with SJF, SRPT, and adaptive policies.
+- **TPI (Tensor Parallel Interface)** — Enhanced tensor parallelism for breaking models into chunks and running across multiple nodes with reduce-scatter optimization.
+- **Active Inference (Non-DRL)** — Bayesian belief-based decision making that learns from environment observations and minimizes Expected Free Energy.
+- **Batch Processing** — Dynamic batching with multiple strategies (fixed-size, fixed-time, adaptive, continuous) for improved throughput.
+- **DFS Scheduler with Pruning** — Depth-first tree search with alpha-beta, branch-and-bound, and beam search pruning for task scheduling.
+- **ILP/Heuristic Scheduler** — Integer Linear Programming for small systems with genetic algorithm fallback for large-scale deployments.
+- **PyTorch to ONNX Conversion** — Model export with optimization and quantization for cross-platform deployment simulation.
+- **Simulation Optimization** — Layer simplification, decode approximation, and caching tricks for faster simulation runs.
+
 ### Quick Example
 
 ```bash
@@ -86,6 +98,32 @@ python kai_cli.py fault-tolerant --model sshleifer/tiny-gpt2 --prompt "Hello"
 
 # List available plugins
 python kai_cli.py plugins --action list
+
+# === PHASE 25 ALGORITHMS ===
+
+# FCIM worker selection analysis
+python kai_cli.py fcim --report
+
+# ADSA adaptive scheduling
+python kai_cli.py adsa --policy adaptive --num-tasks 20 --show-metrics
+
+# Batch processing configuration
+python kai_cli.py batch --max-batch-size 8 --strategy adaptive --show-status
+
+# Active inference controller
+python kai_cli.py active-inference --show-beliefs
+
+# DFS scheduler with pruning
+python kai_cli.py dfs-scheduler --pruning bound --num-tasks 10 --num-workers 5
+
+# ILP/Heuristic scheduler
+python kai_cli.py ilp-scheduler --algorithm auto --num-tasks 20
+
+# ONNX model conversion
+python kai_cli.py onnx --model sshleifer/tiny-gpt2 --output model.onnx --optimize
+
+# Optimized simulation
+python kai_cli.py simulate --model sshleifer/tiny-gpt2 --optimization-level 2 --approximate-decode
 ```
 
 ---

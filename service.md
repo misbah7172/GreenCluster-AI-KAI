@@ -73,6 +73,69 @@ KAI is a **distributed AI inference platform** that lets you run large language 
 
 ---
 
+## Advanced Algorithms (Phase 25)
+
+### FCIM (Fair Cost-Efficient Analysis Mechanism)
+- **Multi-criteria worker selection** — balances cost efficiency, performance, and fairness using weighted scoring.
+- **Jain's Fairness Index** — ensures equitable workload distribution across workers over time.
+- **Dynamic tracking** — continuously monitors allocation history to maintain fairness.
+- **CLI**: `python kai_cli.py fcim --report`
+
+### ADSA (Adaptive Dynamic Scheduling Algorithm)
+- **Multiple scheduling policies** — supports FIFO, SJF (Shortest Job First), SRPT (Shortest Remaining Processing Time), WEIGHTED, and ADAPTIVE modes.
+- **Task aging** — prevents starvation by gradually increasing priority of waiting tasks.
+- **Deadline support** — tasks can specify deadlines for priority scheduling.
+- **CLI**: `python kai_cli.py adsa --policy adaptive --num-tasks 20 --show-metrics`
+
+### TPI (Tensor Parallel Interface) - Enhanced
+- **Model chunking across nodes** — breaks model tensors into shards distributed across multiple workers.
+- **Reduce-scatter optimization** — efficient gradient aggregation for large-scale distributed inference.
+- **Integrated with hybrid parallelism** — seamlessly combines with pipeline parallelism for optimal performance.
+
+### Active Inference Controller (Non-DRL)
+- **Bayesian belief updating** — learns from environment observations without deep reinforcement learning.
+- **Expected Free Energy minimization** — selects actions that minimize uncertainty and achieve goals.
+- **Real-time adaptation** — adjusts decisions dynamically as conditions change.
+- **Uncertainty handling** — explicitly models and handles uncertainty in observations and actions.
+- **CLI**: `python kai_cli.py active-inference --show-beliefs`
+
+### Batch Processing
+- **Multiple batching strategies** — FIXED_SIZE, FIXED_TIME, ADAPTIVE, and CONTINUOUS modes.
+- **Continuous batching** — adds new requests to running batches for maximized throughput.
+- **Memory-aware** — limits batch size based on available GPU memory.
+- **Priority support** — high-priority requests can preempt lower priority work.
+- **CLI**: `python kai_cli.py batch --max-batch-size 8 --strategy adaptive --show-status`
+
+### DFS Scheduler with Pruning
+- **Depth-first search** — explores scheduling/allocation space efficiently.
+- **Multiple pruning strategies** — ALPHA_BETA, BOUND (branch-and-bound), BEAM, and HEURISTIC pruning.
+- **Optimal resource allocation** — finds near-optimal task-to-worker assignments.
+- **Configurable depth** — balance between solution quality and computation time.
+- **CLI**: `python kai_cli.py dfs-scheduler --pruning bound --num-tasks 10 --num-workers 5`
+
+### ILP/Heuristic Scheduler
+- **Integer Linear Programming** — finds provably optimal solutions for small systems using PuLP.
+- **Genetic algorithm** — evolutionary optimization for large-scale problems.
+- **Simulated annealing** — temperature-based search for escaping local optima.
+- **Auto-selection** — automatically chooses ILP vs. heuristic based on problem size.
+- **CLI**: `python kai_cli.py ilp-scheduler --algorithm auto --num-tasks 20`
+
+### PyTorch to ONNX Conversion
+- **Model export** — converts PyTorch models to ONNX format for cross-platform deployment.
+- **ONNX Runtime optimization** — applies graph optimizations for faster inference.
+- **Dynamic quantization** — INT8 quantization during export for smaller model size.
+- **Output validation** — verifies ONNX output matches PyTorch output within tolerance.
+- **CLI**: `python kai_cli.py onnx --model <model> --output model.onnx --optimize`
+
+### Simulation Optimization
+- **Layer simplification** — groups repeated layers to reduce simulation complexity.
+- **Decode approximation** — samples decode steps instead of simulating all tokens.
+- **Attention approximation** — simplified attention computation for faster simulation.
+- **Multi-level optimization** — configurable optimization levels (0-3) trading accuracy for speed.
+- **CLI**: `python kai_cli.py simulate --model <model> --optimization-level 2 --approximate-decode`
+
+---
+
 ## Energy-Efficient Inference (Core Value)
 
 A key advantage of KAI is **reducing power consumption while producing identical output**.
@@ -219,6 +282,19 @@ This means a LLaMA 7B model (~14 GB in fp16) can be reduced to ~3.5 GB in 4-bit 
 | `kai_cli.py fault-tolerant` | Run with fault-tolerant pipeline |
 | `kai_cli.py plugins` | List and manage plugins |
 
+### Phase 25 Advanced Algorithm Commands
+
+| Command | What It Does |
+|---------|-------------|
+| `kai_cli.py fcim` | FCIM worker selection analysis and reports |
+| `kai_cli.py adsa` | ADSA adaptive scheduling with multiple policies |
+| `kai_cli.py batch` | Dynamic batch processing configuration |
+| `kai_cli.py active-inference` | Active inference controller (non-DRL) |
+| `kai_cli.py dfs-scheduler` | DFS scheduler with various pruning strategies |
+| `kai_cli.py ilp-scheduler` | ILP/heuristic scheduling optimization |
+| `kai_cli.py onnx` | PyTorch to ONNX model conversion |
+| `kai_cli.py simulate` | Optimized simulation with approximations |
+
 ---
 
 ## Supported Model Families
@@ -243,7 +319,7 @@ Any HuggingFace `AutoModelForCausalLM` architecture is supported.
 
 ## Test Coverage
 
-- **~180 integration tests** — all passing
+- **~220 integration tests** — all passing
   - 25 tests for energy benchmarking (Phases 1-13)
   - 30 tests for distributed inference (Phases 14-18)
   - 27 tests for gap coverage & production readiness (Phase 19)
@@ -251,7 +327,8 @@ Any HuggingFace `AutoModelForCausalLM` architecture is supported.
   - ~19 tests for dynamic scheduling & migration (Phase 21)
   - ~14 tests for CPU/disk offloading & prefetching (Phase 22)
   - ~14 tests for validation & energy analysis (Phase 23)
-  - **~40 tests for next-gen features (Phase 24)** — plugin architecture, adaptive precision, KV cache, intelligent placement, network-aware scheduling, hybrid parallelism, energy feedback loop, speculative decoding, fault tolerance, auto-tuning
+  - ~40 tests for next-gen features (Phase 24) — plugin architecture, adaptive precision, KV cache, intelligent placement, network-aware scheduling, hybrid parallelism, energy feedback loop, speculative decoding, fault tolerance, auto-tuning
+  - **~40 tests for advanced algorithms (Phase 25)** — FCIM, ADSA, active inference, batch processing, DFS scheduler, ILP/heuristic scheduler, ONNX conversion, simulation optimization
 
 ---
 

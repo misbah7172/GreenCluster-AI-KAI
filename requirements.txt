@@ -39,5 +39,23 @@ bitsandbytes>=0.41.0
 # Testing
 pytest>=7.4.0
 
-# Note: Phase 24 next-gen features (hybrid parallelism, speculative decoding,
-# fault tolerance, auto-tuning, etc.) use only standard library and above deps.
+# === OPTIONAL DEPENDENCIES (Phase 25) ===
+# These are optional and provide additional functionality.
+# Install with: pip install pulp onnx onnxruntime scipy
+
+# ILP Optimization (for ilp_scheduler.py)
+# pulp>=2.7.0
+
+# ONNX Export & Runtime (for onnx_converter.py)
+# onnx>=1.15.0
+# onnxruntime>=1.16.0
+
+# Scientific Computing (for active_inference.py Bayesian methods)
+# scipy>=1.11.0
+
+# Note: All Phase 24 and 25 features work without optional dependencies.
+# Optional packages unlock:
+# - PuLP: Enables exact ILP solving for optimal scheduling (falls back to heuristics)
+# - ONNX: Enables PyTorch to ONNX model conversion and optimization
+# - ONNXRuntime: Enables ONNX model optimization and validation
+# - SciPy: Enables advanced Bayesian inference in active_inference.py

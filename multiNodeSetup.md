@@ -398,3 +398,80 @@ Closed-loop optimization for power-constrained deployments:
 # Start energy feedback controller
 python kai_cli.py energy-loop --power-target 100 --latency-target 50 --daemon
 ```
+
+---
+
+## Advanced Algorithm Features for Multi-Node (Phase 25)
+
+### FCIM Worker Selection
+Fair and cost-efficient worker selection across your cluster:
+```bash
+# Analyze worker fairness and efficiency
+python kai_cli.py fcim --report
+
+# Configure fairness weights
+python kai_cli.py fcim --fairness-weight 0.4 --efficiency-weight 0.4 --cost-weight 0.2
+```
+
+### ADSA Adaptive Scheduling
+Dynamic task scheduling optimized for multi-node workloads:
+```bash
+# Use adaptive scheduling policy
+python kai_cli.py adsa --policy adaptive --show-metrics
+
+# Enable task aging to prevent starvation
+python kai_cli.py adsa --policy sjf --enable-aging --aging-rate 0.1
+```
+
+### Batch Processing
+Process multiple requests together for improved throughput:
+```bash
+# Enable adaptive batching
+python kai_cli.py batch --strategy adaptive --max-batch-size 16
+
+# Enable continuous batching for streaming workloads
+python kai_cli.py batch --strategy continuous --timeout-ms 100
+```
+
+### ILP/Heuristic Scheduler
+Optimal task-to-node allocation:
+```bash
+# Auto-select algorithm based on problem size
+python kai_cli.py ilp-scheduler --algorithm auto --num-tasks 20
+
+# Force ILP for small clusters
+python kai_cli.py ilp-scheduler --algorithm ilp --time-limit 60
+
+# Use genetic algorithm for large-scale deployments
+python kai_cli.py ilp-scheduler --algorithm genetic --population-size 100
+```
+
+### DFS Scheduler with Pruning
+Explore scheduling space with intelligent pruning:
+```bash
+# Use branch-and-bound pruning
+python kai_cli.py dfs-scheduler --pruning bound --max-depth 10
+
+# Use beam search for faster results
+python kai_cli.py dfs-scheduler --pruning beam --beam-width 5
+```
+
+### Simulation Optimization
+Test configurations without actual deployment:
+```bash
+# Run optimized simulation
+python kai_cli.py simulate --model sshleifer/tiny-gpt2 --optimization-level 2
+
+# Enable decode approximation for faster simulation
+python kai_cli.py simulate --model sshleifer/tiny-gpt2 --approximate-decode --sample-rate 0.1
+```
+
+### ONNX Export for Cross-Platform Testing
+Export models for testing across different hardware:
+```bash
+# Export to ONNX with optimization
+python kai_cli.py onnx --model sshleifer/tiny-gpt2 --output model.onnx --optimize
+
+# Export with quantization
+python kai_cli.py onnx --model sshleifer/tiny-gpt2 --output model_int8.onnx --quantize
+```

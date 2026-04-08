@@ -47,7 +47,17 @@ project/
 │   ├── energy_feedback_loop.py   # PID-based energy optimization
 │   ├── speculative_decoder.py    # Draft model speculation with verification
 │   ├── fault_tolerant_pipeline.py # Failure detection and recovery
-│   └── auto_tuner.py             # Auto-tuning benchmark system
+│   ├── auto_tuner.py             # Auto-tuning benchmark system
+│   │
+│   │   # === ADVANCED ALGORITHMS (Phase 25) ===
+│   ├── fcim_worker_selector.py   # FCIM - Fair Cost-Efficient Worker Selection
+│   ├── adsa_scheduler.py         # ADSA - Adaptive Dynamic Scheduling Algorithm
+│   ├── active_inference.py       # Active Inference (Non-DRL) controller
+│   ├── batch_processor.py        # Dynamic batch processing
+│   ├── dfs_scheduler.py          # DFS scheduler with pruning
+│   ├── ilp_scheduler.py          # ILP/Heuristic scheduler
+│   ├── onnx_converter.py         # PyTorch to ONNX conversion
+│   └── simulation_optimizer.py   # Simulation optimization tricks
 │
 ├── monitoring/               # Power and performance monitoring
 │   ├── __init__.py
@@ -103,7 +113,7 @@ project/
 │   ├── test_phase21.py       # ~19 tests (Phase 21)
 │   ├── test_phase22.py       # ~14 tests (Phase 22)
 │   ├── test_phase23.py       # ~14 tests (Phase 23)
-│   └── test_nextgen_features.py  # ~40 tests (Phase 24: next-gen features)
+│   └── test_nextgen_features.py  # ~80 tests (Phases 24-25: next-gen features + algorithms)
 │
 ├── requirements.txt
 ├── BUILD_GUIDE.md
@@ -965,6 +975,77 @@ Phase 1  (Scaffolding)
 
 ---
 
+### Phase 25: Advanced Algorithms & Optimization
+
+**Goal:** Implement advanced scheduling, optimization, and simulation algorithms for maximum efficiency and scalability.
+
+**Tasks:**
+
+1. **`model/fcim_worker_selector.py`** — Fair Cost-Efficient Worker Selection
+   - Multi-criteria worker scoring: cost, efficiency, fairness
+   - Jain's Fairness Index for balanced allocation
+   - Dynamic fairness tracking across allocations
+
+2. **`model/adsa_scheduler.py`** — Adaptive Dynamic Scheduling Algorithm
+   - Multiple scheduling policies: FIFO, SJF, SRPT, WEIGHTED, ADAPTIVE
+   - Task aging to prevent starvation
+   - Dynamic policy switching based on workload
+
+3. **`model/active_inference.py`** — Active Inference Controller (Non-DRL)
+   - Bayesian belief updating from environment observations
+   - Expected Free Energy (EFE) minimization
+   - Real-time decision adjustment under uncertainty
+   - State inference without deep reinforcement learning
+
+4. **`model/batch_processor.py`** — Dynamic Batch Processing
+   - Multiple batching strategies: FIXED_SIZE, FIXED_TIME, ADAPTIVE, CONTINUOUS
+   - Continuous batching for streaming workloads
+   - Memory-aware batch formation
+   - Request prioritization
+
+5. **`model/dfs_scheduler.py`** — DFS Scheduler with Pruning
+   - Depth-first search for task scheduling
+   - Multiple pruning strategies: ALPHA_BETA, BOUND, BEAM, HEURISTIC
+   - Branch-and-bound optimization
+   - Configurable search depth and beam width
+
+6. **`model/ilp_scheduler.py`** — ILP/Heuristic Scheduler
+   - Integer Linear Programming for small systems (uses PuLP)
+   - Genetic algorithm for large-scale optimization
+   - Simulated annealing fallback
+   - Automatic algorithm selection based on problem size
+
+7. **`model/onnx_converter.py`** — PyTorch to ONNX Conversion
+   - Model export with configurable opset version
+   - ONNX Runtime optimization
+   - Dynamic quantization (INT8)
+   - Output validation between PyTorch and ONNX
+
+8. **`model/simulation_optimizer.py`** — Simulation Optimization Tricks
+   - Layer simplification (repeated layer grouping)
+   - Decode phase approximation (sampling)
+   - Attention approximation
+   - Quantization during simulation
+   - Multi-level optimization control
+
+**New CLI Commands:**
+- `kai_cli.py fcim --report` — FCIM worker selection analysis
+- `kai_cli.py adsa --policy adaptive` — ADSA scheduling
+- `kai_cli.py batch --strategy adaptive` — Batch processing
+- `kai_cli.py active-inference --show-beliefs` — Active inference
+- `kai_cli.py dfs-scheduler --pruning bound` — DFS scheduling
+- `kai_cli.py ilp-scheduler --algorithm auto` — ILP/heuristic scheduling
+- `kai_cli.py onnx --model <name> --optimize` — ONNX conversion
+- `kai_cli.py simulate --optimization-level 2` — Optimized simulation
+
+**Deliverables:**
+- 8 new advanced algorithm modules
+- 9 new CLI commands
+- ~40 new tests for Phase 25 features
+- Updated documentation
+
+---
+
 ## Updated Phase Dependency Graph
 
 ```
@@ -992,6 +1073,8 @@ Phase 1-13  (Original KAI -- Energy Benchmarking)
           |                                                +-- Phase 23  (Validation & Analysis)
           |                                                       |
           |                                                       +-- Phase 24  (Next-Gen Features)
+          |                                                              |
+          |                                                              +-- Phase 25  (Advanced Algorithms)
 ```
 
 ---
@@ -1015,6 +1098,9 @@ Phase 1-13  (Original KAI -- Energy Benchmarking)
 | Dashboard            | Streamlit                                 |
 | Plotting             | Matplotlib                                |
 | Data Handling        | Pandas, NumPy                             |
+| ILP Optimization     | PuLP (optional)                           |
+| ONNX Export          | ONNX, ONNXRuntime (optional)              |
+| Bayesian Inference   | NumPy/SciPy                               |
 
 ---
 

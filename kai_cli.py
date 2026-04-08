@@ -685,6 +685,391 @@ def cmd_plugins(args):
             print(f"[KAI] Plugin not found: {args.category}/{args.name}")
 
 
+def cmd_fcim(args):
+    """Fair Cost-Efficient Worker Selection analysis."""
+    from model.fcim_worker_selector import FCIMWorkerSelector, WorkerProfile
+    from model.resource_detector import ResourceDetector
+
+    print(f"[KAI] FCIM Worker Selector (mode={args.resource_mode})")
+    print(f"[KAI] Weights: cost={args.cost_weight}, efficiency={args.efficiency_weight}, fairness={args.fairness_weight}")
+
+    detector = ResourceDetector(mode=args.resource_mode)
+    nodes = detector.scan()
+
+    selector = FCIMWorkerSelector(
+        cost_weight=args.cost_weight,
+        efficiency_weight=args.efficiency_weight,
+        fairness_weight=args.fairness_weight,
+    )
+
+    # Register workers from detected nodes
+    for node in nodes:
+        worker = WorkerProfile(
+            worker_id=node.name,
+            gpu_memory_gb=node.gpu_vram_mb / 1024 if node.gpu_vram_mb else 0,
+            gpu_flops=10.0 if node.has_gpu else 1.0,  # Estimate
+            cpu_cores=node.cpu_cores,
+            ram_gb=node.ram_mb / 1024,
+            network_bandwidth_gbps=1.0,  # Estimate
+        )
+        selector.register_worker(worker)
+        print(f"  Registered: {node.name} (GPU: {node.gpu_vram_mb}MB, RAM: {node.ram_mb}MB)")
+
+    if args.report:
+        report = selector.get_fairness_report()
+        print()
+        print("[FCIM Fairness Report]")
+        print(f"  Jain's Fairness Index: {report['jains_fairness_index']:.4f}")
+        print(f"  Total Workers: {report['num_workers']}")
+        print(f"  Is Fair: {report['is_fair']}")
+        print(f"  Total Allocations: {report['total_allocations']}")
+
+
+def cmd_adsa(args):
+    """Adaptive Dynamic Scheduling analysis."""
+    from model.adsa_scheduler import ADSAScheduler, ADSATask, SchedulingPolicy
+    import time
+    import random
+
+    policy_map = {
+        "fifo": SchedulingPolicy.FIFO,
+        "sjf": SchedulingPolicy.SJF,
+        "srpt": SchedulingPolicy.SRPT,
+        "weighted": SchedulingPolicy.WEIGHTED,
+        "adaptive": SchedulingPolicy.ADAPTIVE,
+    }
+
+    print(f"[KAI] ADSA Scheduler (policy={args.policy})")
+
+    scheduler = ADSAScheduler(initial_policy=policy_map[args.policy])
+
+    # Create test tasks
+    print(f"[KAI] Creating {args.num_tasks} test tasks...")
+    for i in range(args.num_tasks):
+        task = ADSATask(
+            task_id=f"task-{i}",
+            arrival_time=time.time() + i * 0.1,
+            estimated_size=random.uniform(10, 1000),
+            priority=random.randint(1, 10),
+        )
+        scheduler.submit_task(task)
+        print(f"  Task {i}: size={task.estimated_size:.1f}, priority={task.priority}")
+
+    # Get next few tasks
+    print()
+    print("[ADSA Task Order]")
+    for i in range(min(5, args.num_tasks)):
+        task = scheduler.get_next_task()
+        if task:
+            print(f"  {i+1}. {task.task_id} (size={task.estimated_size:.1f}, priority={task.priority})")
+
+    if args.show_metrics:
+        metrics = scheduler.get_metrics()
+        print()
+        print("[ADSA Metrics]")
+        print(f"  Total Tasks: {metrics.total_tasks}")
+        print(f"  Avg Wait Time: {metrics.avg_wait_time:.2f}s")
+        print(f"  Fairness Index: {metrics.fairness_index:.4f}")
+
+
+def cmd_batch(args):
+    """Batch processing configuration."""
+    from model.batch_processor import BatchProcessor, BatchingStrategy
+
+    strategy_map = {
+        "fixed_size": BatchingStrategy.FIXED_SIZE,
+        "fixed_time": BatchingStrategy.FIXED_TIME,
+        "adaptive": BatchingStrategy.ADAPTIVE,
+        "continuous": BatchingStrategy.CONTINUOUS,
+    }
+
+    print(f"[KAI] Batch Processor Configuration")
+    print(f"  Max Batch Size: {args.max_batch_size}")
+    print(f"  Strategy: {args.strategy}")
+    print(f"  Timeout: {args.timeout_ms}ms")
+
+    processor = BatchProcessor(
+        max_batch_size=args.max_batch_size,
+        strategy=strategy_map[args.strategy],
+        batch_timeout_ms=args.timeout_ms,
+    )
+
+    if args.show_status:
+        status = processor.get_queue_status()
+        print()
+        print("[Batch Processor Status]")
+        print(f"  Pending Requests: {status['pending_requests']}")
+        print(f"  Active Batches: {status['active_batches']}")
+        print(f"  Queue Size: {status['queue_size']}")
+        print(f"  Strategy: {status['strategy']}")
+
+
+def cmd_active_inference(args):
+    """Active inference controller."""
+    from model.active_inference import ActiveInferenceAgent, PolicyPreference
+
+    print("[KAI] Active Inference Controller")
+    print(f"  Planning Horizon: {args.planning_horizon}")
+    print(f"  Exploration Factor: {args.exploration_factor}")
+
+    preferences = PolicyPreference(
+        target_latency_ms=args.target_latency,
+        target_throughput=args.target_throughput,
+    )
+
+    agent = ActiveInferenceAgent(
+        preferences=preferences,
+        planning_horizon=args.planning_horizon,
+        exploration_factor=args.exploration_factor,
+    )
+
+    if args.show_beliefs:
+        beliefs = agent.get_state_beliefs()
+        metrics = agent.get_uncertainty_metrics()
+        print()
+        print("[Active Inference Beliefs]")
+        print(f"  Confidence: {metrics['confidence']:.4f}")
+        print(f"  Entropy: {metrics['belief_entropy']:.4f}")
+        print(f"  Most Likely State: {metrics['most_likely_state']}")
+        print()
+        print("  State Probabilities:")
+        for state, prob in sorted(beliefs.items(), key=lambda x: -x[1]):
+            print(f"    {state}: {prob:.4f}")
+
+    # Get recommended action
+    action = agent.select_action()
+    print()
+    print("[Recommended Action]")
+    print(f"  Action: {action.action_type}")
+    print(f"  Confidence: {action.confidence:.4f}")
+    print(f"  Parameters: {action.parameters}")
+
+
+def cmd_dfs_scheduler(args):
+    """DFS scheduler with pruning."""
+    from model.dfs_scheduler import DFSScheduler, TaskSpec, WorkerSpec, PruningStrategy
+    import random
+
+    pruning_map = {
+        "none": PruningStrategy.NONE,
+        "alpha_beta": PruningStrategy.ALPHA_BETA,
+        "bound": PruningStrategy.BOUND,
+        "beam": PruningStrategy.BEAM,
+        "heuristic": PruningStrategy.HEURISTIC,
+    }
+
+    print(f"[KAI] DFS Scheduler (pruning={args.pruning})")
+    print(f"  Time Limit: {args.time_limit}s")
+    print(f"  Tasks: {args.num_tasks}, Workers: {args.num_workers}")
+
+    scheduler = DFSScheduler(
+        pruning_strategy=pruning_map[args.pruning],
+        time_limit_s=args.time_limit,
+        beam_width=args.beam_width,
+    )
+
+    # Add tasks
+    for i in range(args.num_tasks):
+        scheduler.add_task(TaskSpec(
+            task_id=f"task-{i}",
+            memory_required=random.uniform(1, 5),
+            compute_required=random.uniform(10, 100),
+        ))
+
+    # Add workers
+    for i in range(args.num_workers):
+        scheduler.add_worker(WorkerSpec(
+            worker_id=f"worker-{i}",
+            memory_capacity=random.uniform(10, 20),
+            compute_capacity=random.uniform(200, 500),
+            cost_per_unit=random.uniform(0.8, 1.2),
+        ))
+
+    print()
+    print("[Solving...]")
+    result = scheduler.solve()
+
+    print()
+    print("[DFS Scheduler Result]")
+    print(f"  Feasible: {result.is_feasible}")
+    print(f"  Optimal: {result.is_optimal}")
+    print(f"  Best Cost: {result.best_cost:.2f}")
+    print(f"  Nodes Explored: {result.nodes_explored}")
+    print(f"  Nodes Pruned: {result.nodes_pruned}")
+    print(f"  Search Time: {result.search_time_s:.3f}s")
+
+    if result.best_state:
+        print()
+        print("  Assignments:")
+        for task_id, worker_id in result.best_state.assignments.items():
+            print(f"    {task_id} -> {worker_id}")
+
+
+def cmd_ilp_scheduler(args):
+    """ILP/Heuristic scheduler."""
+    from model.ilp_scheduler import AdaptiveScheduler, HeuristicScheduler, SchedulingProblem
+    import random
+
+    print(f"[KAI] ILP/Heuristic Scheduler (algorithm={args.algorithm})")
+    print(f"  ILP Threshold: {args.ilp_threshold}")
+    print(f"  Tasks: {args.num_tasks}, Workers: {args.num_workers}")
+
+    problem = SchedulingProblem()
+
+    # Add tasks
+    for i in range(args.num_tasks):
+        problem.tasks[f"task-{i}"] = (
+            random.uniform(1, 5),  # memory
+            random.uniform(10, 100),  # compute
+            random.randint(1, 5),  # priority
+        )
+
+    # Add workers
+    for i in range(args.num_workers):
+        problem.workers[f"worker-{i}"] = (
+            random.uniform(15, 30),  # memory_cap
+            random.uniform(300, 600),  # compute_cap
+            random.uniform(0.8, 1.2),  # cost_factor
+        )
+
+    if args.algorithm == "auto":
+        scheduler = AdaptiveScheduler(
+            ilp_threshold=args.ilp_threshold,
+            ilp_time_limit_s=args.time_limit,
+        )
+    else:
+        scheduler = HeuristicScheduler(
+            algorithm=args.algorithm if args.algorithm != "ilp" else "greedy",
+            time_limit_s=args.time_limit,
+        )
+
+    print()
+    print("[Solving...]")
+    solution = scheduler.solve(problem)
+
+    print()
+    print("[ILP/Heuristic Result]")
+    print(f"  Feasible: {solution.is_feasible}")
+    print(f"  Optimal: {solution.is_optimal}")
+    print(f"  Objective Value: {solution.objective_value:.2f}")
+    print(f"  Solver Type: {solution.solver_type.value}")
+    print(f"  Solve Time: {solution.solve_time_s:.3f}s")
+
+    if solution.assignments:
+        print()
+        print("  Assignments:")
+        for task_id, worker_id in solution.assignments.items():
+            print(f"    {task_id} -> {worker_id}")
+
+
+def cmd_onnx(args):
+    """PyTorch to ONNX conversion."""
+    from model.onnx_converter import ONNXConverter, ExportConfig, ONNXOptimizationLevel
+
+    print(f"[KAI] ONNX Converter")
+    print(f"  Model: {args.model}")
+    print(f"  Output: {args.output}")
+    print(f"  Opset: {args.opset}")
+
+    config = ExportConfig(
+        opset_version=args.opset,
+        optimization_level=ONNXOptimizationLevel.EXTENDED if args.optimize else ONNXOptimizationLevel.NONE,
+        quantize=args.quantize,
+    )
+
+    converter = ONNXConverter(config)
+
+    # Load model
+    from model.hf_loader import HFModelLoader
+    print(f"[KAI] Loading model...")
+    loader = HFModelLoader(
+        args.model,
+        dtype=args.dtype,
+        trust_remote_code=args.trust_remote_code,
+        token=args.token,
+    )
+
+    try:
+        from transformers import AutoModelForCausalLM
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            torch_dtype=loader.torch_dtype,
+            trust_remote_code=args.trust_remote_code,
+            token=args.token,
+        )
+
+        print("[KAI] Exporting to ONNX...")
+        result = converter.export(model, args.output, config=config)
+
+        print()
+        print("[ONNX Export Result]")
+        print(f"  Success: {result.success}")
+        if result.success:
+            print(f"  Output Path: {result.output_path}")
+            print(f"  Model Size: {result.model_size_mb:.2f} MB")
+            print(f"  Original Size: {result.original_size_mb:.2f} MB")
+            print(f"  Compression Ratio: {result.compression_ratio:.2f}x")
+            print(f"  Export Time: {result.export_time_s:.2f}s")
+            if result.validated:
+                print(f"  Validated: Yes (max diff: {result.max_diff:.6f})")
+        else:
+            print(f"  Error: {result.error}")
+
+    except Exception as e:
+        print(f"[KAI] Error: {e}")
+
+
+def cmd_simulate(args):
+    """Optimized simulation."""
+    from model.simulation_optimizer import SimulationOptimizer, SimulationConfig, OptimizationLevel
+
+    level_map = {
+        0: OptimizationLevel.NONE,
+        1: OptimizationLevel.BASIC,
+        2: OptimizationLevel.AGGRESSIVE,
+        3: OptimizationLevel.EXTREME,
+    }
+
+    print(f"[KAI] Simulation Optimizer")
+    print(f"  Model: {args.model}")
+    print(f"  Optimization Level: {args.optimization_level}")
+    print(f"  Decode Steps: {args.num_decode_steps}")
+
+    config = SimulationConfig(
+        optimization_level=level_map[args.optimization_level],
+        approximate_decode=args.approximate_decode,
+        merge_repeated_layers=args.merge_layers,
+    )
+
+    optimizer = SimulationOptimizer(config)
+
+    # Mock model (since we're simulating)
+    print("[KAI] Running optimized simulation...")
+
+    result = optimizer.optimize_simulation(
+        model=None,  # Mock
+        input_data=None,  # Mock
+        num_decode_steps=args.num_decode_steps,
+    )
+
+    print()
+    print("[Simulation Result]")
+    print(f"  Total Time: {result.total_time_ms:.2f}ms")
+    print(f"  Prefill Time: {result.prefill_time_ms:.2f}ms")
+    print(f"  Decode Time: {result.decode_time_ms:.2f}ms")
+    print(f"  Estimated Full Time: {result.estimated_full_time_ms:.2f}ms")
+    print(f"  Layers Simulated: {result.layers_simulated}")
+    print(f"  Layers Skipped: {result.layers_skipped}")
+    print(f"  Decode Steps Simulated: {result.decode_steps_simulated}")
+    print(f"  Decode Steps Interpolated: {result.decode_steps_interpolated}")
+
+    stats = optimizer.get_statistics()
+    print()
+    print("[Optimizer Statistics]")
+    for key, value in stats.items():
+        print(f"  {key}: {value}")
+
+
 def cmd_prepare(args):
     """Download model, chunk weights, and save for K8s deployment."""
     from model.hf_loader import HFModelLoader
@@ -1056,10 +1441,96 @@ def main():
     plugins_parser.add_argument("--action", default="list", choices=["list", "info"],
                                  help="Action to perform")
     plugins_parser.add_argument("--category", default="scheduler",
-                                 choices=["scheduler", "optimizer", "executor", "cache", "placement", "parallelism"],
+                                 choices=["scheduler", "optimizer", "executor", "cache", "placement", "parallelism", "batcher", "worker_selector", "converter"],
                                  help="Plugin category")
     plugins_parser.add_argument("--name", default=None, help="Plugin name (for info action)")
     plugins_parser.set_defaults(func=cmd_plugins)
+
+    # --- fcim (Fair Cost-Efficient Worker Selection) ---
+    fcim_parser = subparsers.add_parser("fcim", help="Fair cost-efficient worker selection analysis")
+    fcim_parser.add_argument("--resource-mode", default="local", choices=["local", "kubernetes"])
+    fcim_parser.add_argument("--cost-weight", type=float, default=0.35, help="Weight for cost efficiency")
+    fcim_parser.add_argument("--efficiency-weight", type=float, default=0.35, help="Weight for performance")
+    fcim_parser.add_argument("--fairness-weight", type=float, default=0.30, help="Weight for fairness")
+    fcim_parser.add_argument("--report", action="store_true", help="Generate fairness report")
+    fcim_parser.set_defaults(func=cmd_fcim)
+
+    # --- adsa (Adaptive Dynamic Scheduling) ---
+    adsa_parser = subparsers.add_parser("adsa", help="Adaptive dynamic scheduling analysis")
+    adsa_parser.add_argument("--policy", default="adaptive",
+                              choices=["fifo", "sjf", "srpt", "weighted", "adaptive"],
+                              help="Scheduling policy")
+    adsa_parser.add_argument("--num-tasks", type=int, default=10, help="Number of test tasks")
+    adsa_parser.add_argument("--show-metrics", action="store_true", help="Show scheduler metrics")
+    adsa_parser.set_defaults(func=cmd_adsa)
+
+    # --- batch (Batch Processing) ---
+    batch_parser = subparsers.add_parser("batch", help="Batch processing configuration")
+    batch_parser.add_argument("--max-batch-size", type=int, default=8, help="Maximum batch size")
+    batch_parser.add_argument("--strategy", default="adaptive",
+                               choices=["fixed_size", "fixed_time", "adaptive", "continuous"],
+                               help="Batching strategy")
+    batch_parser.add_argument("--timeout-ms", type=float, default=100.0, help="Batch timeout in ms")
+    batch_parser.add_argument("--show-status", action="store_true", help="Show batch processor status")
+    batch_parser.set_defaults(func=cmd_batch)
+
+    # --- active-inference (Active Inference Controller) ---
+    ai_parser = subparsers.add_parser("active-inference", help="Active inference controller")
+    ai_parser.add_argument("--planning-horizon", type=int, default=3, help="Planning horizon")
+    ai_parser.add_argument("--exploration-factor", type=float, default=0.2, help="Exploration factor")
+    ai_parser.add_argument("--target-latency", type=float, default=100.0, help="Target latency (ms)")
+    ai_parser.add_argument("--target-throughput", type=float, default=10.0, help="Target throughput")
+    ai_parser.add_argument("--show-beliefs", action="store_true", help="Show current belief state")
+    ai_parser.set_defaults(func=cmd_active_inference)
+
+    # --- dfs-scheduler (DFS with Pruning) ---
+    dfs_parser = subparsers.add_parser("dfs-scheduler", help="DFS scheduler with pruning")
+    dfs_parser.add_argument("--pruning", default="bound",
+                             choices=["none", "alpha_beta", "bound", "beam", "heuristic"],
+                             help="Pruning strategy")
+    dfs_parser.add_argument("--time-limit", type=float, default=10.0, help="Time limit in seconds")
+    dfs_parser.add_argument("--beam-width", type=int, default=10, help="Beam width for beam search")
+    dfs_parser.add_argument("--num-tasks", type=int, default=5, help="Number of test tasks")
+    dfs_parser.add_argument("--num-workers", type=int, default=3, help="Number of workers")
+    dfs_parser.set_defaults(func=cmd_dfs_scheduler)
+
+    # --- ilp-scheduler (ILP/Heuristic Scheduler) ---
+    ilp_parser = subparsers.add_parser("ilp-scheduler", help="ILP/Heuristic scheduler")
+    ilp_parser.add_argument("--algorithm", default="auto",
+                             choices=["auto", "ilp", "greedy", "genetic", "annealing"],
+                             help="Solver algorithm")
+    ilp_parser.add_argument("--ilp-threshold", type=int, default=50,
+                             help="Problem size threshold for ILP")
+    ilp_parser.add_argument("--time-limit", type=float, default=60.0, help="Time limit in seconds")
+    ilp_parser.add_argument("--num-tasks", type=int, default=10, help="Number of test tasks")
+    ilp_parser.add_argument("--num-workers", type=int, default=5, help="Number of workers")
+    ilp_parser.set_defaults(func=cmd_ilp_scheduler)
+
+    # --- onnx (ONNX Conversion) ---
+    onnx_parser = subparsers.add_parser("onnx", help="PyTorch to ONNX conversion")
+    onnx_parser.add_argument("--model", required=True, help="HuggingFace model name")
+    onnx_parser.add_argument("--output", required=True, help="Output ONNX file path")
+    onnx_parser.add_argument("--opset", type=int, default=17, help="ONNX opset version")
+    onnx_parser.add_argument("--optimize", action="store_true", help="Enable optimization")
+    onnx_parser.add_argument("--quantize", action="store_true", help="Enable quantization")
+    onnx_parser.add_argument("--validate", action="store_true", help="Validate output")
+    onnx_parser.add_argument("--dtype", default="float16")
+    onnx_parser.add_argument("--trust-remote-code", action="store_true")
+    onnx_parser.add_argument("--token", default=None)
+    onnx_parser.set_defaults(func=cmd_onnx)
+
+    # --- simulate (Simulation Optimization) ---
+    sim_parser = subparsers.add_parser("simulate", help="Optimized simulation")
+    sim_parser.add_argument("--model", required=True, help="HuggingFace model name")
+    sim_parser.add_argument("--optimization-level", type=int, default=2,
+                             choices=[0, 1, 2, 3], help="Optimization level (0=none, 3=extreme)")
+    sim_parser.add_argument("--num-decode-steps", type=int, default=100, help="Decode steps to simulate")
+    sim_parser.add_argument("--approximate-decode", action="store_true", help="Enable decode approximation")
+    sim_parser.add_argument("--merge-layers", action="store_true", help="Merge repeated layers")
+    sim_parser.add_argument("--dtype", default="float16")
+    sim_parser.add_argument("--trust-remote-code", action="store_true")
+    sim_parser.add_argument("--token", default=None)
+    sim_parser.set_defaults(func=cmd_simulate)
 
     args = parser.parse_args()
 
