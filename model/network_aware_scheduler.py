@@ -20,6 +20,9 @@ Usage::
 import logging
 import threading
 import time
+import hashlib
+import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -141,6 +144,30 @@ class NetworkMonitor:
         
         # Callbacks for network state changes
         self._callbacks: List[Callable[[NetworkMetrics], None]] = []
+
+        # Optional explicit link metrics map from env.
+        # Format:
+        # {
+        #   "nodeA->nodeB": {"latency_ms": 0.3, "bandwidth_total_gbps": 100, "bandwidth_used_gbps": 20}
+        # }
+        self._link_overrides = self._load_link_overrides_from_env()
+
+    @staticmethod
+    def _load_link_overrides_from_env() -> Dict[str, Dict[str, float]]:
+        raw = os.environ.get("KAI_NETWORK_LINKS_JSON", "")
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return {
+                    str(k): dict(v)
+                    for k, v in parsed.items()
+                    if isinstance(v, dict)
+                }
+        except Exception as e:
+            logger.warning("Invalid KAI_NETWORK_LINKS_JSON value: %s", e)
+        return {}
     
     def start(self) -> None:
         """Start monitoring."""
@@ -255,23 +282,34 @@ class NetworkMonitor:
                             pass
     
     def _measure_link(self, source: str, target: str) -> NetworkMetrics:
-        """Measure a single link (simplified implementation)."""
-        # In production, this would do actual network measurements
-        # For now, simulate with reasonable defaults
-        import random
-        
-        # Simulate latency (0.5-2ms for LAN)
-        base_latency = 0.5
-        jitter = random.uniform(0, 0.5)
-        latency = base_latency + jitter
-        
-        # Simulate bandwidth usage (0-80% of 10Gbps)
+        """Measure a single link with deterministic behavior.
+
+        No random jitter is introduced. If explicit link metrics are provided,
+        those values are used. Otherwise, deterministic synthetic values are
+        derived from the node pair identity.
+        """
+        key = f"{source}->{target}"
+        rev = f"{target}->{source}"
+        override = self._link_overrides.get(key) or self._link_overrides.get(rev)
+
+        if override:
+            return NetworkMetrics(
+                source_node=source,
+                target_node=target,
+                latency_ms=float(override.get("latency_ms", 1.0)),
+                bandwidth_used_gbps=float(override.get("bandwidth_used_gbps", 0.0)),
+                bandwidth_total_gbps=float(override.get("bandwidth_total_gbps", 10.0)),
+                packet_loss_pct=float(override.get("packet_loss_pct", 0.0)),
+            )
+
+        # Deterministic synthetic fallback for environments without measurements.
+        digest = hashlib.sha256(f"{source}|{target}".encode("utf-8")).hexdigest()
+        seed = int(digest[:8], 16)
+        latency = 0.6 + (seed % 140) / 100.0  # 0.6 .. 2.0 ms
         bandwidth_total = 10.0
-        bandwidth_used = random.uniform(0, 8.0)
-        
-        # Simulate packet loss (usually 0, occasionally non-zero)
-        packet_loss = 0.0 if random.random() > 0.05 else random.uniform(0, 0.5)
-        
+        bandwidth_used = 2.0 + ((seed >> 8) % 40) / 10.0  # 2.0 .. 6.0 Gbps
+        packet_loss = ((seed >> 16) % 5) / 100.0  # 0.00 .. 0.04%
+
         return NetworkMetrics(
             source_node=source,
             target_node=target,

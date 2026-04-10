@@ -69,6 +69,20 @@ GATEWAY_NODE_PORT = 30080
 MONITOR_PORT = 9090
 
 
+def _parse_node_selector(raw: str) -> Dict[str, str]:
+    """Parse node selector string like 'k=v,k2=v2' into a dict."""
+    result: Dict[str, str] = {}
+    if not raw:
+        return result
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        k, v = item.split("=", 1)
+        result[k.strip()] = v.strip()
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -120,6 +134,8 @@ def _build_chunk_deployment(
     num_chunks: int,
     model_type: str = "transformer",
     image: str = CHUNK_IMAGE,
+    rdma_enabled: bool = False,
+    nccl_enabled: bool = False,
 ) -> client.V1Deployment:
     """Build a Deployment object for a single model chunk."""
 
@@ -130,18 +146,30 @@ def _build_chunk_deployment(
         "chunk-id": str(chunk_id),
     }
 
+    chunk_env = [
+        client.V1EnvVar(name="CHUNK_ID", value=str(chunk_id)),
+        client.V1EnvVar(name="NUM_CHUNKS", value=str(num_chunks)),
+        client.V1EnvVar(name="MODEL_TYPE", value=model_type),
+        client.V1EnvVar(name="WEIGHTS_DIR", value="/data/chunks"),
+        client.V1EnvVar(name="PORT", value=str(GRPC_PORT)),
+    ]
+
+    if nccl_enabled:
+        chunk_env.extend([
+            client.V1EnvVar(name="NCCL_IB_DISABLE", value="0" if rdma_enabled else "1"),
+            client.V1EnvVar(name="NCCL_ASYNC_ERROR_HANDLING", value="1"),
+            client.V1EnvVar(name="NCCL_DEBUG", value=os.environ.get("KAI_NCCL_DEBUG", "WARN")),
+        ])
+        iface = os.environ.get("KAI_NCCL_SOCKET_IFNAME", "")
+        if iface:
+            chunk_env.append(client.V1EnvVar(name="NCCL_SOCKET_IFNAME", value=iface))
+
     container = client.V1Container(
         name="chunk-server",
         image=image,
         image_pull_policy="IfNotPresent",
         ports=[client.V1ContainerPort(container_port=GRPC_PORT, name="grpc")],
-        env=[
-            client.V1EnvVar(name="CHUNK_ID", value=str(chunk_id)),
-            client.V1EnvVar(name="NUM_CHUNKS", value=str(num_chunks)),
-            client.V1EnvVar(name="MODEL_TYPE", value=model_type),
-            client.V1EnvVar(name="WEIGHTS_DIR", value="/data/chunks"),
-            client.V1EnvVar(name="PORT", value=str(GRPC_PORT)),
-        ],
+        env=chunk_env,
         resources=client.V1ResourceRequirements(
             requests={"cpu": "500m", "memory": "1Gi", "nvidia.com/gpu": "1"},
             limits={"cpu": "2", "memory": "4Gi", "nvidia.com/gpu": "1"},
@@ -165,6 +193,11 @@ def _build_chunk_deployment(
         ]
     )
 
+    node_selector = {"nvidia.com/gpu.present": "true"}
+    node_selector.update(_parse_node_selector(os.environ.get("KAI_CHUNK_NODE_SELECTOR", "")))
+    if rdma_enabled:
+        node_selector.update(_parse_node_selector(os.environ.get("KAI_RDMA_NODE_SELECTOR", "rdma.capable=true")))
+
     template = client.V1PodTemplateSpec(
         metadata=client.V1ObjectMeta(labels=labels),
         spec=client.V1PodSpec(
@@ -173,6 +206,7 @@ def _build_chunk_deployment(
                 client.V1Volume(name="chunk-data", empty_dir=client.V1EmptyDirVolumeSource()),
             ],
             affinity=client.V1Affinity(pod_anti_affinity=anti_affinity),
+            node_selector=node_selector,
             tolerations=[
                 client.V1Toleration(
                     key="nvidia.com/gpu", operator="Exists", effect="NoSchedule",
@@ -218,6 +252,8 @@ def _build_chunk_service(chunk_id: int) -> client.V1Service:
 def _build_gateway_deployment(
     num_chunks: int,
     image: str = GATEWAY_IMAGE,
+    rdma_enabled: bool = False,
+    nccl_enabled: bool = False,
 ) -> client.V1Deployment:
     """Build the gateway Deployment."""
 
@@ -226,15 +262,35 @@ def _build_gateway_deployment(
         f"kai-chunk-{i}:{GRPC_PORT}" for i in range(num_chunks)
     )
 
+    gateway_env = [
+        client.V1EnvVar(name="GATEWAY_PORT", value=str(GATEWAY_PORT)),
+        client.V1EnvVar(name="CHUNK_HOSTS", value=chunk_hosts),
+        client.V1EnvVar(
+            name="KAI_GATEWAY_ROUTE_POLICY",
+            value=os.environ.get("KAI_GATEWAY_ROUTE_POLICY", "deterministic-latency"),
+        ),
+    ]
+
+    latency_json = os.environ.get("KAI_LINK_LATENCY_MS", "")
+    if latency_json:
+        gateway_env.append(
+            client.V1EnvVar(name="KAI_LINK_LATENCY_MS", value=latency_json)
+        )
+
+    if nccl_enabled:
+        gateway_env.extend([
+            client.V1EnvVar(name="KAI_NCCL_ENABLED", value="true"),
+            client.V1EnvVar(name="KAI_RDMA_ENABLED", value="true" if rdma_enabled else "false"),
+        ])
+
+    gateway_selector = _parse_node_selector(os.environ.get("KAI_GATEWAY_NODE_SELECTOR", ""))
+
     container = client.V1Container(
         name="gateway",
         image=image,
         image_pull_policy="IfNotPresent",
         ports=[client.V1ContainerPort(container_port=GATEWAY_PORT, name="http")],
-        env=[
-            client.V1EnvVar(name="GATEWAY_PORT", value=str(GATEWAY_PORT)),
-            client.V1EnvVar(name="CHUNK_HOSTS", value=chunk_hosts),
-        ],
+        env=gateway_env,
         resources=client.V1ResourceRequirements(
             requests={"cpu": "250m", "memory": "512Mi"},
             limits={"cpu": "1", "memory": "2Gi"},
@@ -255,7 +311,7 @@ def _build_gateway_deployment(
 
     template = client.V1PodTemplateSpec(
         metadata=client.V1ObjectMeta(labels=labels),
-        spec=client.V1PodSpec(containers=[container]),
+        spec=client.V1PodSpec(containers=[container], node_selector=gateway_selector or None),
     )
 
     return client.V1Deployment(
@@ -421,6 +477,8 @@ class KAIController:
         num_chunks: int,
         model_type: str = "transformer",
         image: str = CHUNK_IMAGE,
+        rdma_enabled: bool = False,
+        nccl_enabled: bool = False,
     ) -> None:
         """Create Deployments and Services for N chunks.
 
@@ -452,7 +510,14 @@ class KAIController:
             logger.info("Created Service %s", name)
 
             # Create deployment
-            dep = _build_chunk_deployment(i, num_chunks, model_type, image)
+            dep = _build_chunk_deployment(
+                i,
+                num_chunks,
+                model_type,
+                image,
+                rdma_enabled=rdma_enabled,
+                nccl_enabled=nccl_enabled,
+            )
             self.apps_v1.create_namespaced_deployment(self.namespace, dep)
             logger.info("Created Deployment %s", name)
 
@@ -462,6 +527,8 @@ class KAIController:
         self,
         num_chunks: int,
         image: str = GATEWAY_IMAGE,
+        rdma_enabled: bool = False,
+        nccl_enabled: bool = False,
     ) -> None:
         """Create the gateway Deployment and NodePort Service.
 
@@ -482,7 +549,12 @@ class KAIController:
         self.core_v1.create_namespaced_service(self.namespace, svc)
         logger.info("Created Service kai-gateway (NodePort %d)", GATEWAY_NODE_PORT)
 
-        dep = _build_gateway_deployment(num_chunks, image)
+        dep = _build_gateway_deployment(
+            num_chunks,
+            image,
+            rdma_enabled=rdma_enabled,
+            nccl_enabled=nccl_enabled,
+        )
         self.apps_v1.create_namespaced_deployment(self.namespace, dep)
         logger.info("Created Deployment kai-gateway")
 
@@ -531,6 +603,8 @@ class KAIController:
         self,
         num_chunks: int = 3,
         model_type: str = "transformer",
+        rdma_enabled: bool = False,
+        nccl_enabled: bool = False,
     ) -> None:
         """Deploy the full pipeline: chunks + gateway + monitor.
 
@@ -541,8 +615,17 @@ class KAIController:
         model_type : str
             ``"transformer"`` or ``"cnn"``.
         """
-        self.deploy_chunks(num_chunks, model_type)
-        self.deploy_gateway(num_chunks)
+        self.deploy_chunks(
+            num_chunks,
+            model_type,
+            rdma_enabled=rdma_enabled,
+            nccl_enabled=nccl_enabled,
+        )
+        self.deploy_gateway(
+            num_chunks,
+            rdma_enabled=rdma_enabled,
+            nccl_enabled=nccl_enabled,
+        )
         self.deploy_monitor()
         logger.info("Full pipeline deployed (%d chunks, model=%s)", num_chunks, model_type)
 
@@ -707,6 +790,23 @@ class KAIController:
         url = gateway_url or self.get_gateway_url()
         req = urllib.request.Request(f"{url}/health")
         resp = urllib.request.urlopen(req, timeout=15)
+        return json.loads(resp.read().decode())
+
+    def probe_gateway_latency(
+        self,
+        gateway_url: Optional[str] = None,
+        samples: int = 2,
+    ) -> Dict[str, Any]:
+        """Trigger gateway latency probing and route recalibration."""
+        url = gateway_url or self.get_gateway_url()
+        body = json.dumps({"samples": int(samples)}).encode()
+        req = urllib.request.Request(
+            f"{url}/probe-latency",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        resp = urllib.request.urlopen(req, timeout=60)
         return json.loads(resp.read().decode())
 
     # ------------------------------------------------------------------
@@ -1050,6 +1150,8 @@ def main():
     deploy_p.add_argument("--model", type=str, default="transformer", choices=["transformer", "cnn"])
     deploy_p.add_argument("--wait", action="store_true", help="Wait for pods to be ready")
     deploy_p.add_argument("--timeout", type=int, default=300, help="Readiness timeout (seconds)")
+    deploy_p.add_argument("--rdma", action="store_true", help="Enable RDMA-aware scheduling profile")
+    deploy_p.add_argument("--nccl", action="store_true", help="Enable NCCL env tuning profile")
 
     # status
     sub.add_parser("status", help="Show pod status")
@@ -1060,6 +1162,11 @@ def main():
 
     # metrics
     sub.add_parser("metrics", help="Collect metrics from monitor pods")
+
+    # probe-latency
+    probe_p = sub.add_parser("probe-latency", help="Probe gateway latencies and refresh route")
+    probe_p.add_argument("--gateway-url", type=str, default=None)
+    probe_p.add_argument("--samples", type=int, default=2)
 
     # teardown
     sub.add_parser("teardown", help="Remove all KAI resources")
@@ -1078,7 +1185,12 @@ def main():
     ctrl = KAIController()
 
     if args.command == "deploy":
-        ctrl.deploy_all(num_chunks=args.num_chunks, model_type=args.model)
+        ctrl.deploy_all(
+            num_chunks=args.num_chunks,
+            model_type=args.model,
+            rdma_enabled=bool(args.rdma),
+            nccl_enabled=bool(args.nccl),
+        )
         if args.wait:
             ok = ctrl.wait_for_ready(timeout=args.timeout)
             if not ok:
@@ -1095,6 +1207,13 @@ def main():
     elif args.command == "metrics":
         metrics = ctrl.collect_metrics()
         print(json.dumps(metrics, indent=2))
+
+    elif args.command == "probe-latency":
+        result = ctrl.probe_gateway_latency(
+            gateway_url=args.gateway_url,
+            samples=args.samples,
+        )
+        print(json.dumps(result, indent=2))
 
     elif args.command == "teardown":
         ctrl.teardown()

@@ -1105,3 +1105,29 @@ Phase 1-13  (Original KAI -- Energy Benchmarking)
 ---
 
 *This guide will be updated as development progresses. Await instruction to begin implementation.*
+
+---
+
+## Implementation Status - 2026-04-11
+
+### Build-Guide Context
+- The phased build workflow remains accurate as a development narrative and structure reference.
+- Current implementation adds a stabilized comprehensive dashboard workflow as the primary runtime validation surface.
+- Telemetry and KV instrumentation described across phases are now exposed through live session-driven UI panels.
+
+### Current Practical Build/Run Reality
+- For GPU-backed execution, use .venv310 (CUDA torch).
+- .venv is CPU-only and should be treated as a fallback environment for non-GPU checks.
+- Dashboard-driven validation is now a first-class part of post-build verification.
+
+### Suggested Verification Commands
+```bash
+# CUDA verification
+./.venv310/Scripts/python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+
+# Dashboard verification
+./.venv310/Scripts/python -m streamlit run dashboard/comprehensive_dashboard.py
+```
+
+### Reader Note
+- This build guide status note reflects the implementation state as of 2026-04-11.

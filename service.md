@@ -440,3 +440,24 @@ KAI's quantization is simpler (NF4 or INT8 only), but it combines with distribut
 **KAI is NOT best when:** You need maximum speed above all else, need production throughput, want zero-setup local chat, or only have one machine with no offloading needs.
 
 ---
+
+---
+
+## Implementation Status - 2026-04-11
+
+### Service-Level State
+- Core dashboard-driven operations are implemented and stable for interactive inference and telemetry visibility.
+- Runtime service behavior now includes asynchronous generation control and session-based run tracking.
+- KV cache reporting is based on observed counters and runtime mode, including fallback awareness.
+
+### Operational Highlights
+- GPU telemetry stream includes utilization, VRAM, temperature, power, and rolling energy estimation.
+- Routing/performance views reflect live measured values rather than static summaries.
+- Export controls are available for telemetry and KV diagnostics workflows.
+
+### Environment Guidance
+- For service-level efficiency validation, use the CUDA-capable .venv310 runtime.
+- CPU-only .venv remains suitable for basic non-GPU checks.
+
+### Reader Note
+- This service overview is synchronized with current implementation behavior as of 2026-04-11.

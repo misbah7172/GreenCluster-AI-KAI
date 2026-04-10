@@ -475,3 +475,84 @@ python kai_cli.py onnx --model sshleifer/tiny-gpt2 --output model.onnx --optimiz
 # Export with quantization
 python kai_cli.py onnx --model sshleifer/tiny-gpt2 --output model_int8.onnx --quantize
 ```
+
+---
+
+## End-to-End Visualization: How a Model Runs Through KAI
+
+### 1) Deployment-Time Flow (one-time setup)
+
+```mermaid
+flowchart LR
+    A[User runs: kai_cli.py prepare] --> B[HF loader downloads model]
+    B --> C[Layer chunker splits model into layer ranges]
+    C --> D[Auto/Intelligent placement maps chunks to nodes]
+    D --> E[Kubernetes controller deploys chunk pods + gateway + monitor]
+    E --> F[Chunk servers load assigned layers only]
+```
+
+### 2) Inference-Time Flow (per request)
+
+```mermaid
+sequenceDiagram
+    participant U as User / Client
+    participant G as Gateway (HTTP)
+    participant C0 as Chunk-0 (early layers)
+    participant C1 as Chunk-1 (mid layers)
+    participant C2 as Chunk-2 (late layers + lm_head)
+    participant M as Monitor/Event Bus
+
+    U->>G: POST /infer {prompt, max_tokens}
+    G->>G: Tokenize prompt
+    loop Per generated token
+        G->>C0: Forward(input_ids or hidden_state)
+        C0->>C1: Intermediate activations (gRPC)
+        C1->>C2: Intermediate activations (gRPC)
+        C2-->>G: Logits
+        G->>G: Sampling / decoding next token
+        M-->>G: Power/latency events (optional control signals)
+    end
+    G-->>U: Generated text (stream or final response)
+```
+
+### 3) Runtime Optimization Overlay (what runs alongside inference)
+
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Runtime Control & Optimization                   │
+├─────────────────────────────────────────────────────────────────────┤
+│ FCIM      -> picks best worker/chunk placement candidate           │
+│ ADSA      -> reorders task queue by arrival/size/priority          │
+│ DEAS      -> reacts to power thresholds and triggers migration      │
+│ Net-aware -> avoids high-latency consecutive layer placements      │
+│ KV cache  -> keeps recent tokens FP16, older history compressed    │
+│ Batching  -> groups requests for better throughput                 │
+│ Feedback  -> tunes batch/power/precision/offload in closed loop    │
+│ Fault-Tol -> checkpoint, reassign, and resume on node failure      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 4) Quick Mental Model
+
+```text
+Prompt -> Gateway -> Chunk-0 -> Chunk-1 -> Chunk-2 -> Logits -> Next token
+                          ^          ^          ^
+                    monitored + scheduled + optimized continuously
+```
+
+---
+
+## Implementation Status - 2026-04-11
+
+### Multi-Node Relevance
+- The setup flow in this guide remains valid for distributed chunk deployment and gateway routing.
+- Dashboard and telemetry updates now improve observability once the cluster is running.
+- DEAS, monitoring, and migration-related endpoints documented here align with implemented runtime paths.
+
+### Practical Runtime Notes
+- Use CUDA-capable .venv310 on operator machines when running dashboard-led validation.
+- If a node lacks NVML access, telemetry gracefully falls back to nvidia-smi where available.
+- KV analytics and inference history are session-driven and useful for validating multi-node behavior over repeated prompts.
+
+### Reader Note
+- This multi-node guide is aligned to the currently implemented operational tooling as of 2026-04-11.

@@ -89,6 +89,13 @@ def cmd_run(args):
     total_usable = sum(n.usable_memory_mb for n in nodes)
     print(f"[KAI] Cluster: {len(nodes)} node(s), {total_usable:.0f} MB usable")
 
+    # For single-node runs, use Transformers/Accelerate offload directly.
+    # This path is more robust for very large models than the experimental
+    # custom chunk offload route and supports GPU+RAM+disk memory budgets.
+    if getattr(args, "offload", False) and len(nodes) == 1:
+        _run_single_node_offload(args, loader, nodes, quantize=quantize)
+        return
+
     # Create chunks
     num_chunks = args.num_chunks or len(nodes)
     print(f"[KAI] Partitioning model into {num_chunks} chunks...")
@@ -165,6 +172,98 @@ def cmd_run(args):
         print(result)
         print("---")
 
+    print("[KAI] Done.")
+
+
+def _run_single_node_offload(args, loader, nodes, quantize=None):
+    """Run single-node inference with Accelerate device-map offloading.
+
+    Uses Hugging Face `device_map="auto"` with explicit max-memory budgets
+    and optional disk offload folder. This is intended for oversized models
+    on a single GPU machine.
+    """
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    gpu_budget_mb = float(getattr(args, "gpu_budget_mb", 0) or 0)
+    if gpu_budget_mb <= 0:
+        for n in nodes:
+            if n.has_gpu and n.gpu_vram_mb > 0:
+                gpu_budget_mb = max(512.0, n.gpu_vram_mb * 0.8)
+                break
+    ram_budget_mb = max(1024.0, sum(n.usable_memory_mb for n in nodes) * 0.8)
+
+    os.makedirs(args.disk_swap_dir, exist_ok=True)
+
+    print(
+        "[KAI] Single-node offload backend: "
+        f"GPU={gpu_budget_mb:.0f} MB, RAM={ram_budget_mb:.0f} MB, "
+        f"disk={args.disk_swap_dir}"
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model,
+        trust_remote_code=args.trust_remote_code,
+        token=args.token,
+    )
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model_kwargs = {
+        "torch_dtype": loader.torch_dtype,
+        "low_cpu_mem_usage": True,
+        "trust_remote_code": args.trust_remote_code,
+        "token": args.token,
+        "device_map": "auto",
+        "offload_folder": args.disk_swap_dir,
+        "offload_state_dict": True,
+        "max_memory": {
+            0: f"{int(gpu_budget_mb)}MiB",
+            "cpu": f"{int(ram_budget_mb)}MiB",
+        },
+    }
+
+    if quantize in ("4bit", "8bit"):
+        try:
+            from transformers import BitsAndBytesConfig
+
+            if quantize == "4bit":
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=loader.torch_dtype,
+                )
+            else:
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                )
+        except Exception as e:
+            logger.warning("bitsandbytes quantization unavailable: %s", e)
+
+    print("[KAI] Loading model with Accelerate offload...")
+    model = AutoModelForCausalLM.from_pretrained(args.model, **model_kwargs)
+    model.eval()
+
+    inputs = tokenizer(args.prompt, return_tensors="pt")
+    input_device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    inputs = {k: v.to(input_device) for k, v in inputs.items()}
+
+    print(f"[KAI] Generating (max_tokens={args.max_tokens}, temp={args.temperature})...")
+    print("---")
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=args.max_tokens,
+            do_sample=args.temperature > 0,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            repetition_penalty=args.repetition_penalty,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+
+    text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    print(text)
+    print("---")
     print("[KAI] Done.")
 
 

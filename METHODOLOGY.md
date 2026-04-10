@@ -901,3 +901,21 @@ energy:
 *Document Version: 1.0*
 *Last Updated: April 2026*
 *Authors: KAI Development Team*
+
+---
+
+## Implementation Status - 2026-04-11
+
+### Methodology-to-Implementation Alignment
+- The methodology described in this document now has concrete dashboard observability support through comprehensive_dashboard.py.
+- Energy, routing, and KV-related runtime indicators are surfaced from measured telemetry and session counters.
+- Asynchronous generation control and stop behavior are implemented, improving experiment control during iterative runs.
+
+### Evidence-Oriented Updates
+- KV analytics now report low-level runtime counters and mode context.
+- GPU telemetry ingestion supports NVML primary path with fallback collection path.
+- Run history provides repeatable prompt-level traceability for evaluation sessions.
+
+### Reproducibility Note
+- Use .venv310 for CUDA-backed execution when reproducing performance and energy observations.
+- This section documents current implementation reality as of 2026-04-11.
