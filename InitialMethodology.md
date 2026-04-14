@@ -291,6 +291,65 @@ Metric selection rationale:
 Request -> Profile -> Schedule -> Execute -> Aggregate -> Monitor -> Adapt
 ```
 
+### 11.3 IEEE-Style Flowchart (Project Lifecycle)
+
+**Fig. 1. End-to-end KAI project workflow from proposal, design, and implementation to evaluation and reporting.**
+
+```mermaid
+flowchart TD
+  A[Problem Identification and Motivation] --> B[Research Objectives and Constraints]
+  B --> C[Methodology Proposal]
+  C --> D[System Architecture Design]
+  D --> E[Dataset and Telemetry Planning]
+  E --> F[Algorithm Design<br/>Partitioning + Scheduling + Energy Control]
+  F --> G[Prototype Development]
+  G --> H[Distributed Deployment on Cluster]
+  H --> I[Experiment Execution]
+  I --> J[Performance and Energy Evaluation]
+  J --> K[Validation and Statistical Analysis]
+  K --> L[Comparative Baseline Study]
+  L --> M[Findings, Limitations, and Future Work]
+  M --> N[Final Research Report]
+```
+
+### 11.4 IEEE-Style Architecture Flowchart
+
+**Fig. 2. Proposed KAI system architecture with control-plane orchestration, distributed execution plane, and feedback-driven optimization loop.**
+
+```mermaid
+flowchart LR
+  subgraph CP[Control Plane]
+    GW[Gateway<br/>Request Ingress]
+    SCH[Scheduler<br/>FCIM/ADSA/ILP]
+    MON[Monitor<br/>Power, Latency, Utilization]
+    CTRL[Adaptive Controller<br/>Policy Update and Tuning]
+  end
+
+  subgraph EP[Execution Plane]
+    C0[Chunk Worker 0<br/>Layers 0...n]
+    C1[Chunk Worker 1<br/>Layers n...m]
+    C2[Chunk Worker 2<br/>Layers m...k]
+  end
+
+  U[Client Request] --> GW
+  GW --> SCH
+  SCH --> C0
+  C0 --> C1
+  C1 --> C2
+  C2 --> R[Response Aggregation]
+  R --> O[Client Output]
+
+  C0 --> MON
+  C1 --> MON
+  C2 --> MON
+  MON --> CTRL
+  CTRL --> SCH
+```
+
+### 11.5 IEEE Figure Referencing Note
+
+In manuscript form, these diagrams should be cited in text as: "As shown in Fig. 1" and "The architecture in Fig. 2 illustrates..." to match standard IEEE paper style.
+
 ---
 
 ## 12. Assumptions
