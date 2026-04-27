@@ -188,14 +188,67 @@ def run_k8s_experiment(
 
     # --- Start DEAS if enabled ---
     deas_active = False
+    energy_controller = None
     if enable_deas:
         try:
             from monitoring.event_bus import EventBus
             from model.auto_partitioner import AutoPartitioner
+            from model.energy_feedback_loop import EnergyFeedbackController, EnergyMetrics
+
             event_bus = EventBus()
             event_bus.start()
             partitioner = AutoPartitioner()
-            ctrl.start_deas(event_bus, partitioner, cooldown_s=deas_cooldown)
+
+            # Build energy-controller metrics from live cluster profiles so
+            # scheduler signals are data-driven and can trigger DEAS rebalance.
+            def _cluster_energy_metrics() -> EnergyMetrics:
+                profiles = ctrl.get_node_energy_profiles()
+                if not profiles:
+                    return EnergyMetrics(
+                        power_w=0.0,
+                        throughput_tokens_per_sec=0.0,
+                        latency_ms=0.0,
+                        batch_size=batch_size,
+                        memory_used_mb=0.0,
+                        memory_total_mb=1.0,
+                        gpu_utilization_pct=0.0,
+                        worker_id="cluster",
+                    )
+
+                def _level_rank(level: str) -> int:
+                    return {"critical": 2, "warning": 1, "optimal": 0}.get(str(level).lower(), 0)
+
+                hot = sorted(
+                    profiles,
+                    key=lambda p: (_level_rank(p.get("threshold_level", "optimal")), p.get("avg_power_w", 0.0)),
+                    reverse=True,
+                )[0]
+
+                return EnergyMetrics(
+                    power_w=float(hot.get("avg_power_w", 0.0) or 0.0),
+                    throughput_tokens_per_sec=float(hot.get("throughput", 0.0) or 0.0),
+                    latency_ms=float(hot.get("avg_latency_ms", 0.0) or 0.0),
+                    batch_size=batch_size,
+                    memory_used_mb=max(0.0, float(hot.get("usable_memory_mb", 0.0) or 0.0)),
+                    memory_total_mb=max(1.0, float(hot.get("usable_memory_mb", 0.0) or 0.0) + 1.0),
+                    gpu_utilization_pct=float(hot.get("gpu_utilization_pct", 0.0) or 0.0),
+                    worker_id=str(hot.get("node_name", "cluster")),
+                )
+
+            energy_controller = EnergyFeedbackController(
+                target_power_w=200.0,
+                target_latency_ms=120.0,
+                update_interval_s=2.0,
+            )
+            energy_controller.set_metric_callback(_cluster_energy_metrics)
+
+            ctrl.start_deas(
+                event_bus,
+                partitioner,
+                cooldown_s=deas_cooldown,
+                energy_controller=energy_controller,
+            )
+            energy_controller.start()
             deas_active = True
             logger.info("DEAS enabled (cooldown=%.1fs)", deas_cooldown)
         except Exception as e:
@@ -264,6 +317,8 @@ def run_k8s_experiment(
             if deas is not None:
                 migration_events = deas.get_migration_history()
             threshold_events = ctrl.collect_threshold_events()
+            if energy_controller is not None:
+                energy_controller.stop()
             ctrl.stop_deas()
             event_bus.stop()
             logger.info(

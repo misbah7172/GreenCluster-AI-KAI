@@ -14,6 +14,8 @@ import io
 import json
 import time
 import unittest
+import importlib.util
+from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
 
 
@@ -200,6 +202,112 @@ class TestDEASScheduler(unittest.TestCase):
             self.assertEqual(plan.source_node, "crit-node")
             self.assertEqual(plan.target_node, "cool-node")
             self.assertEqual(plan.reason, "critical_threshold")
+
+    def test_scheduler_signal_triggers_rebalance_via_controller(self):
+        """Energy controller signal should trigger controller.trigger_rebalance."""
+        bus = MagicMock()
+        partitioner = MagicMock()
+        controller = MagicMock()
+        controller.trigger_rebalance.return_value = {"rebalanced": True}
+
+        from model.deas_scheduler import DEASScheduler, MigrationState
+        sched = DEASScheduler(
+            event_bus=bus,
+            auto_partitioner=partitioner,
+            controller=controller,
+            cooldown_s=0.0,
+        )
+
+        signal = {
+            "overloaded_worker": "node-a",
+            "metrics": {
+                "power_w": 260.0,
+                "latency_ms": 210.0,
+                "throughput_tokens_per_sec": 1.5,
+            },
+        }
+        sched.handle_scheduler_signal(signal)
+
+        controller.trigger_rebalance.assert_called_once()
+        self.assertEqual(sched.state, MigrationState.IDLE)
+
+    def test_scheduler_signal_respects_cooldown(self):
+        """Scheduler signals should be ignored while DEAS cooldown is active."""
+        bus = MagicMock()
+        partitioner = MagicMock()
+        controller = MagicMock()
+
+        from model.deas_scheduler import DEASScheduler
+        sched = DEASScheduler(
+            event_bus=bus,
+            auto_partitioner=partitioner,
+            controller=controller,
+            cooldown_s=60.0,
+        )
+        sched._last_rebalance_time = time.monotonic()
+
+        signal = {
+            "inefficient_node": "node-b",
+            "metrics": {
+                "power_w": 280.0,
+                "latency_ms": 220.0,
+                "throughput_tokens_per_sec": 1.0,
+            },
+        }
+        sched.handle_scheduler_signal(signal)
+
+        controller.trigger_rebalance.assert_not_called()
+
+    def test_bind_energy_controller_registers_callback(self):
+        """bind_energy_controller should register DEAS callback on controller."""
+        bus = MagicMock()
+        partitioner = MagicMock()
+        from model.deas_scheduler import DEASScheduler
+
+        sched = DEASScheduler(
+            event_bus=bus,
+            auto_partitioner=partitioner,
+            controller=None,
+            cooldown_s=30.0,
+        )
+
+        energy_controller = MagicMock()
+        sched.bind_energy_controller(energy_controller)
+
+        energy_controller.set_scheduler_callback.assert_called_once()
+        cb = energy_controller.set_scheduler_callback.call_args[0][0]
+        self.assertTrue(callable(cb))
+
+    def test_k8s_controller_start_deas_binds_energy_controller(self):
+        """KAIController.start_deas wires energy controller callback into DEAS."""
+        module_path = Path(__file__).resolve().parents[1] / "kubernetes" / "controller.py"
+        spec = importlib.util.spec_from_file_location("kai_k8s_controller", str(module_path))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        KAIController = mod.KAIController
+
+        # Bypass KAIController.__init__ (kube config) for unit testing.
+        ctrl = object.__new__(KAIController)
+        event_bus = MagicMock()
+        partitioner = MagicMock()
+        energy_controller = MagicMock()
+
+        with patch("model.deas_scheduler.DEASScheduler") as mock_deas_cls:
+            deas_instance = MagicMock()
+            mock_deas_cls.return_value = deas_instance
+
+            KAIController.start_deas(
+                ctrl,
+                event_bus=event_bus,
+                auto_partitioner=partitioner,
+                cooldown_s=5.0,
+                energy_controller=energy_controller,
+            )
+
+            deas_instance.bind_energy_controller.assert_called_once_with(energy_controller)
+            deas_instance.start.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

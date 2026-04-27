@@ -119,6 +119,58 @@ class DEASScheduler:
         self._migration_history: List[MigrationRecord] = []
         self._lock = threading.Lock()
 
+    def bind_energy_controller(self, energy_controller) -> None:
+        """Bind an EnergyFeedbackController to DEAS scheduler signals.
+
+        Registers :meth:`handle_scheduler_signal` as the scheduler callback
+        on the energy controller so DEAS can react to overloaded/inefficient
+        worker signals in addition to CRITICAL threshold events.
+        """
+        if energy_controller is None:
+            return
+        setter = getattr(energy_controller, "set_scheduler_callback", None)
+        if callable(setter):
+            setter(self.handle_scheduler_signal)
+            logger.info("DEAS bound to EnergyFeedbackController scheduler callback")
+
+    def handle_scheduler_signal(self, signal: Dict[str, Any]) -> None:
+        """Handle scheduler signal emitted by the energy feedback loop.
+
+        Expected payload (subset):
+        - ``overloaded_worker``: worker id/name or None
+        - ``inefficient_node``: worker id/name or None
+        - ``metrics``: dict with latency/power/throughput values
+
+        When overload or inefficiency is reported and cooldown allows,
+        DEAS triggers a rebalance through the controller integration.
+        """
+        if not isinstance(signal, dict):
+            return
+
+        overloaded_worker = signal.get("overloaded_worker")
+        inefficient_node = signal.get("inefficient_node")
+        metrics = signal.get("metrics", {}) if isinstance(signal.get("metrics"), dict) else {}
+
+        # Explicit overload/inefficiency flags are preferred.  Fall back to
+        # metric-based heuristics if flags are absent.
+        should_trigger = bool(overloaded_worker or inefficient_node)
+        if not should_trigger:
+            power_w = float(metrics.get("power_w", 0.0) or 0.0)
+            latency_ms = float(metrics.get("latency_ms", 0.0) or 0.0)
+            throughput = float(metrics.get("throughput_tokens_per_sec", 0.0) or 0.0)
+            should_trigger = (power_w > 0 and latency_ms > 0 and throughput > 0 and latency_ms > 180.0 and power_w > 220.0 and throughput < 2.0)
+
+        if not should_trigger:
+            return
+
+        reason = "energy_controller_signal"
+        if overloaded_worker:
+            reason = f"overloaded_worker:{overloaded_worker}"
+        elif inefficient_node:
+            reason = f"inefficient_node:{inefficient_node}"
+
+        self._trigger_rebalance(reason=reason)
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -143,29 +195,37 @@ class DEASScheduler:
 
     def _on_critical_event(self, event) -> None:
         """Handler for CRITICAL threshold events.  Enforces cooldown."""
-        now = time.monotonic()
-        with self._lock:
-            if self._state != MigrationState.IDLE:
-                logger.debug("Migration in progress — ignoring CRITICAL event")
-                return
-            if now - self._last_rebalance_time < self._cooldown_s:
-                logger.debug("Cooldown active — ignoring CRITICAL event")
-                return
-            self._state = MigrationState.PAUSING
-
         logger.warning(
             "CRITICAL event from %s (%.1fW, %.1f%% TDP) — evaluating rebalance",
             event.node_name, event.power_w, event.tdp_pct,
         )
 
+        self._trigger_rebalance(reason=f"critical_threshold:{event.node_name}")
+
+    def _trigger_rebalance(self, reason: str) -> None:
+        """Trigger rebalance via controller integration with cooldown guards."""
+        now = time.monotonic()
+        with self._lock:
+            if self._state != MigrationState.IDLE:
+                logger.debug("Migration in progress — ignoring rebalance trigger (%s)", reason)
+                return
+            if now - self._last_rebalance_time < self._cooldown_s:
+                logger.debug("Cooldown active — ignoring rebalance trigger (%s)", reason)
+                return
+            self._state = MigrationState.PAUSING
+
         try:
-            # TODO: in a full implementation, gather profiles and execute migration
-            # For now, log and reset state
+            if self._controller and hasattr(self._controller, "trigger_rebalance"):
+                result = self._controller.trigger_rebalance()
+                logger.info("DEAS rebalance triggered (%s): %s", reason, result)
+            else:
+                logger.info("DEAS rebalance trigger (%s) received, but no controller integration is configured", reason)
+
             with self._lock:
                 self._last_rebalance_time = time.monotonic()
                 self._state = MigrationState.IDLE
         except Exception:
-            logger.exception("Error during DEAS rebalance")
+            logger.exception("Error during DEAS rebalance trigger (%s)", reason)
             with self._lock:
                 self._state = MigrationState.IDLE
 

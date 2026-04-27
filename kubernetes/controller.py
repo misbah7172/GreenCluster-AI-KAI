@@ -910,6 +910,7 @@ class KAIController:
         event_bus,
         auto_partitioner,
         cooldown_s: float = 30.0,
+        energy_controller=None,
     ) -> None:
         """Create and start the DEAS scheduler.
 
@@ -921,6 +922,9 @@ class KAIController:
             Partitioner for recalculation on rebalance.
         cooldown_s : float
             Minimum seconds between migration attempts.
+        energy_controller : EnergyFeedbackController, optional
+            If provided, DEAS binds to controller scheduler signals so
+            overloaded/inefficient worker events can trigger rebalance.
         """
         from model.deas_scheduler import DEASScheduler
 
@@ -930,6 +934,8 @@ class KAIController:
             controller=self,
             cooldown_s=cooldown_s,
         )
+        if energy_controller is not None:
+            self._deas.bind_energy_controller(energy_controller)
         self._deas.start()
         logger.info("DEAS scheduler started (cooldown=%.1fs)", cooldown_s)
 
