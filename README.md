@@ -14,6 +14,7 @@ KAI is a platform that enables running **large AI models on clusters of low-end 
 - **Real-Time Energy Instrumentation** — Sub-100ms GPU sampling, ring buffers, TDP auto-detection, trapezoidal energy integration, and power threshold alerts via an async event bus.
 - **Dynamic Energy-Aware Scheduling (DEAS)** — Predictive and cost-aware scheduler that triggers on CRITICAL events and degradation trends, scores migrations by EER benefit minus cost/latency penalties, supports top-k multi-chunk plans, adaptive cooldown, and 5-step Pause/Checkpoint/Migrate/Relink/Resume execution.
 - **CPU/Disk Offloading** — FlexGen-style tiered weight management (GPU VRAM → System RAM → Disk) with double-buffered prefetching to hide transfer latency.
+- **Single-GPU Oversized Model Execution** — Runs models larger than available VRAM using layer streaming, preemptive OOM protection, adaptive batch sizing, runtime precision adaptation, and GPU memory pooling.
 - **Single-Command CLI** — `python kai_cli.py run --model <name> --prompt "Hello" --max-tokens 100`
 - **Quantization** — Optional 4-bit (NF4) and 8-bit (INT8) quantization via bitsandbytes to reduce memory per chunk.
 - **Docker Build & Prepare** — `kai build` builds all Docker images; `kai prepare` downloads, chunks, and saves weights for K8s deployment.
@@ -335,6 +336,11 @@ KAI/
 │   ├── deas_scheduler.py         #   Dynamic Energy-Aware Scheduler (Phase 21)
 │   ├── tiered_weight_manager.py  #   GPU/RAM/Disk tiered weight placement (Phase 22)
 │   ├── prefetch_engine.py        #   Double-buffered async weight prefetching (Phase 22)
+│   ├── layer_streamer.py         #   Layer-by-layer GPU streaming for oversized models
+│   ├── gpu_memory_pool.py        #   Preallocated GPU buffer pool to reduce fragmentation
+│   ├── oom_guardian.py           #   Preemptive OOM pressure detection and action hooks
+│   ├── adaptive_batch_controller.py # Dynamic batch scaling under memory pressure
+│   ├── runtime_precision_manager.py # Runtime FP32/FP16/INT8/INT4 adaptation manager
 │   │
 │   │   # === NEXT-GEN FEATURES (Phase 24) ===
 │   ├── plugin_architecture.py    #   Modular plugin system with registry
@@ -396,6 +402,9 @@ KAI/
 │
 ├── logs/                         # Experiment output (JSON)
 ├── docs/                         # Phase documentation
+│   ├── SINGLE_GPU_AUDIT_AND_PLAN.md
+│   ├── SINGLE_GPU_IMPLEMENTATION_GUIDE.md
+│   └── SINGLE_GPU_EXECUTIVE_SUMMARY.md
 ├── kai_cli.py                    # Unified CLI (run, scan, partition, benchmark, dashboard)
 ├── requirements.txt
 ├── BUILD_GUIDE.md
@@ -1401,7 +1410,7 @@ This project is for academic and research purposes.
 
 ---
 
-## Implementation Status - 2026-04-27
+## Implementation Status - 2026-04-28
 
 ### What Is Now Implemented
 - The production dashboard in dashboard/comprehensive_dashboard.py is the primary UX for running and validating KAI behavior.
@@ -1410,6 +1419,7 @@ This project is for academic and research purposes.
 - Live GPU telemetry is active with NVML-first sampling and nvidia-smi fallback.
 - DEAS is upgraded to predictive and cost-aware planning with top-k migration selection, adaptive cooldown tuning, history-informed scoring, and optional localized ILP refinement.
 - Kubernetes rebalance flow now supports explicit no-beneficial-plan outcomes and bounded batch migration execution.
+- Single-GPU memory stack is implemented with layer streaming, GPU memory pooling, OOMGuardian protection, adaptive batch control, and runtime precision management for models larger than VRAM.
 
 ### Recommended Runtime
 - Use .venv310 for CUDA-enabled execution.
@@ -1428,4 +1438,4 @@ python kai_cli_dashboard.py dashboard-pro
 ```
 
 ### Reader Note
-- This README reflects the currently implemented dashboard, telemetry, and scheduler behavior as of 2026-04-27.
+- This README reflects the currently implemented dashboard, telemetry, scheduler behavior, and single-GPU memory stack as of 2026-04-28.

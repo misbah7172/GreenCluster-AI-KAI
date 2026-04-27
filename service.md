@@ -37,9 +37,14 @@ Use this format: `role (module)`.
 - **accelerator** (`model/speculative_decoder.py`) - Draft-and-verify speculative decoding engine.
 - **healer** (`model/fault_tolerant_pipeline.py`) - Failure detection, checkpoint recovery, and reassignment.
 - **precision-tuner** (`model/adaptive_precision.py`) - Dynamic FP16/INT8/INT4 precision control.
+- **runtime-precision-manager** (`model/runtime_precision_manager.py`) - Runtime precision plan switching under memory pressure.
 - **cache-manager** (`model/kv_cache_optimizer.py`) - KV cache reuse, compression, and eviction policies.
 - **tier-manager** (`model/tiered_weight_manager.py`) - GPU/RAM/disk weight placement manager.
 - **prefetcher** (`model/prefetch_engine.py`) - Async prefetch to hide offload transfer latency.
+- **layer-streamer** (`model/layer_streamer.py`) - Streams layer batches through GPU with load/compute/evict flow.
+- **memory-pool** (`model/gpu_memory_pool.py`) - Reuses preallocated GPU buffers to reduce fragmentation.
+- **oom-guardian** (`model/oom_guardian.py`) - Classifies memory pressure and triggers preemptive safeguards.
+- **batch-governor** (`model/adaptive_batch_controller.py`) - Adapts batch size based on pressure and latency outcomes.
 - **auto-tuner** (`model/auto_tuner.py`) - Searches configs for best objective (energy/latency/throughput).
 - **plugin-hub** (`model/plugin_architecture.py`) - Strategy registry and extension interface.
 - **latency-prober** (`model/latency_probe.py`) - Real endpoint RTT probing with cache.
@@ -247,7 +252,7 @@ Why this works:
 
 This is what makes KAI unique: **it's not just about making large models accessible to low-end hardware — it's about making inference more energy-efficient by design.**
 
-> **Important: KAI requires 2 or more machines (nodes) to deliver its power-saving advantage.** The energy savings come from distributing layers across multiple low-power GPUs instead of running everything on one high-power GPU. If you only have a single machine, KAI's distributed architecture has no benefit — use [Ollama](https://ollama.com), [AirLLM](https://github.com/lyogavin/Airllm), or [llama.cpp](https://github.com/ggerganov/llama.cpp) instead for efficient single-machine inference.
+> **Important:** KAI's strongest energy-saving advantage still comes from 2+ distributed nodes. However, KAI now also supports single-machine oversized-model execution using layer streaming, adaptive precision, and OOM-guarded degradation when VRAM is insufficient.
 
 KAI's built-in energy benchmarking proves this. Run `python kai_cli.py benchmark --mode both` and KAI will:
 1. Run the model on a single GPU and measure total energy (Wh).
@@ -520,6 +525,7 @@ KAI's quantization is simpler (NF4 or INT8 only), but it combines with distribut
 | 4-bit/8-bit quantization to reduce memory per chunk | Fewer quant formats than llama.cpp/GGUF |
 | Private and secure (your own cluster) | Overkill for casual local use |
 | Full monitoring + dashboard | |
+| Single-GPU layer streaming for models larger than VRAM | |
 | CPU/disk offloading for models exceeding VRAM | |
 | Dynamic energy-aware scheduling with live migration | |
 | Real-time power threshold alerts via event bus | |
@@ -530,21 +536,22 @@ KAI's quantization is simpler (NF4 or INT8 only), but it combines with distribut
 | **Intelligent placement** optimizes layer-to-node mapping | |
 | **Energy feedback loop** minimizes power consumption | |
 
-**KAI is best when:** You have 2+ low-end PCs with small GPUs, you want to run a model that doesn't fit on any single one, you want **lower power consumption** than a single high-end GPU, and you want provable energy metrics. Or: you have a single machine with limited VRAM and want offloading to RAM/disk. Or: you need advanced features like speculative decoding, hybrid parallelism, or fault tolerance.
+**KAI is best when:** You have 2+ low-end PCs with small GPUs, you want to run a model that doesn't fit on any single one, you want **lower power consumption** than a single high-end GPU, and you want provable energy metrics. Or: you have a single machine with limited VRAM and want layer streaming plus offloading with graceful degradation. Or: you need advanced features like speculative decoding, hybrid parallelism, or fault tolerance.
 
-**KAI is NOT best when:** You need maximum speed above all else, need production throughput, want zero-setup local chat, or only have one machine with no offloading needs.
-
----
+**KAI is NOT best when:** You need maximum speed above all else, need production throughput, want zero-setup local chat, or only have one machine where the model already fits comfortably and you do not need streaming/offloading controls.
 
 ---
 
-## Implementation Status - 2026-04-27
+---
+
+## Implementation Status - 2026-04-28
 
 ### Service-Level State
 - Core dashboard-driven operations are implemented and stable for interactive inference and telemetry visibility.
 - Runtime service behavior now includes asynchronous generation control and session-based run tracking.
 - KV cache reporting is based on observed counters and runtime mode, including fallback awareness.
 - DEAS runtime now includes predictive and cost-aware scheduling with top-k migration planning, adaptive cooldown tuning, and optional localized ILP candidate refinement.
+- Single-GPU oversized-model execution stack is implemented with layer streaming, GPU memory pooling, OOMGuard action hooks, adaptive batch control, and runtime precision management.
 
 ### Operational Highlights
 - GPU telemetry stream includes utilization, VRAM, temperature, power, and rolling energy estimation.
@@ -557,4 +564,4 @@ KAI's quantization is simpler (NF4 or INT8 only), but it combines with distribut
 - CPU-only .venv remains suitable for basic non-GPU checks.
 
 ### Reader Note
-- This service overview is synchronized with current implementation behavior as of 2026-04-27.
+- This service overview is synchronized with current implementation behavior as of 2026-04-28.
