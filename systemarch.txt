@@ -1,0 +1,183 @@
+Create a detailed system architecture for a distributed, energy-aware LLM inference platform named KAI (Kubernetes Adaptive Inference). The diagram should be professional, research-grade, and easy to present in an academic paper.
+
+Primary objective:
+Show how KAI performs end-to-end inference, adaptive scheduling, energy-aware control, and dynamic model chunk placement across heterogeneous GPU nodes in Kubernetes.
+
+Diagram type and structure:
+
+Produce three diagrams on one canvas.
+Diagram A: End-to-end system architecture (highest priority).
+Diagram B: Scheduler and adaptive controller internal architecture (detailed).
+Diagram C: Critical event control-flow sequence (from overload detection to migration completion).
+Scope and boundaries:
+
+External actors:
+Researcher or End User
+Admin Operator
+Platform boundary:
+KAI Cluster
+External services:
+Hugging Face Model Source
+Kubernetes API Server
+Optional observability backend (Prometheus and Grafana style)
+Required components for Diagram A:
+
+Access and interaction layer:
+User Client
+Dashboard UI
+API Entry (Gateway Service)
+Inference execution layer:
+Request Router
+Batch Processor
+Distributed Chunk Workers (multiple nodes)
+Model Layer Chunks on each worker
+KV Cache and Prefetch Engine
+Speculative Decoder
+Scheduling and optimization layer:
+ADSA Scheduler (adaptive queue and policy engine)
+FCIM Worker Selector (fair cost-efficient assignment)
+DEAS Scheduler (dynamic energy-aware migration planner)
+Network-Aware Scheduler
+ILP Scheduler (exact optimization path)
+DFS Scheduler (search with pruning fallback)
+Intelligent Placement Engine
+Auto Partitioner and Auto Tuner
+Adaptive control layer:
+Energy Feedback Controller (closed-loop controller)
+PID-based decision module
+Active Inference Controller (probabilistic decision support)
+Threshold Service (optimal, warning, critical levels)
+Event Bus
+Observability and monitoring layer:
+GPU Monitor
+CPU Monitor
+Metrics Aggregator
+Monitor Service
+Threshold Evaluator
+Telemetry Stream
+Orchestration and runtime layer:
+Kubernetes Controller
+Chunk Deployment Manager
+Migration Executor
+Service Discovery
+Container Runtime
+Infrastructure layer:
+Node A GPU Worker
+Node B GPU Worker
+Node C GPU Worker
+Network Topology and Link Characteristics (latency and bandwidth)
+Mandatory connections and labels for Diagram A:
+
+Client to Gateway via HTTP or WebSocket.
+Gateway to Chunk Workers via gRPC.
+Gateway to Scheduler stack for dispatch decision.
+ADSA to FCIM for worker selection.
+FCIM to workers for assignment.
+GPU and CPU monitors to Metrics Aggregator.
+Metrics Aggregator to Threshold Service.
+Threshold Service to Event Bus.
+Event Bus to DEAS Scheduler.
+DEAS to Intelligent Placement and Auto Partitioner.
+DEAS to Kubernetes Controller for migration commands.
+Kubernetes Controller to deployments and workers for pod or chunk relocation.
+Network monitor signals to Network-Aware Scheduler and placement engine.
+Feedback from execution metrics to Energy Feedback Controller.
+Adaptive controller policy output back to scheduler stack.
+Dashboard consumes both operational metrics and control-state summaries.
+Visual semantics:
+
+Use solid arrows for data plane paths.
+Use dashed arrows for control plane paths.
+Use dotted arrows for telemetry and monitoring paths.
+Annotate each arrow with protocol or signal type:
+HTTP
+gRPC
+Metrics
+Event
+Policy Update
+Migration Command
+Group components into clearly named swimlanes:
+Client and Access
+Inference Data Plane
+Scheduling and Control Plane
+Observability
+Orchestration and Infrastructure
+Add a legend explaining line styles and color categories.
+Keep layout left-to-right for request flow and top-to-bottom for feedback loops.
+Required content for Diagram B (internal adaptive controller and scheduler architecture):
+
+Inputs:
+Power
+Latency
+Throughput
+Memory pressure
+GPU utilization
+State core:
+Controller State Store
+Action History
+Stability Window
+Metrics History Buffer
+Decision core:
+PID Power Loop
+PID Latency Loop
+Rule-Priority Evaluator
+Constraint Guard
+Policy Selector
+Action layer:
+Batch Size Adjustment
+Power Limit Adjustment
+Precision Adjustment
+Offloading Toggle
+Scheduling policy update to ADSA and DEAS
+Outcome loop:
+Apply config to runtime
+Observe new metrics
+Recompute action
+Continue closed loop
+Include a note:
+Latency guard has higher priority than aggressive energy optimization.
+Required content for Diagram C (critical event sequence):
+
+Participants:
+GPU Monitor
+Threshold Service
+Event Bus
+DEAS Scheduler
+Intelligent Placement Engine
+Kubernetes Controller
+Worker Nodes
+Metrics Service
+Sequence:
+Power crosses critical threshold.
+Threshold Service emits critical event.
+Event Bus publishes event.
+DEAS evaluates cooldown and state.
+DEAS requests new placement plan.
+Placement engine returns migration plan.
+Kubernetes controller executes migration.
+Worker nodes re-link and resume inference.
+Metrics service validates post-migration stability.
+Controller updates policy if required.
+Quality and annotation requirements:
+
+Add compact callouts for design goals:
+Energy efficiency
+Latency SLA protection
+Fairness across workers
+Fault tolerance
+Scalability under heterogeneous hardware
+Add failure-handling notes:
+Node overload
+Link congestion
+Worker offline fallback
+Solver fallback from ILP to heuristic
+Include a title and subtitle:
+Title: KAI Distributed Adaptive Inference System Architecture
+Subtitle: Energy-aware scheduling, feedback control, and Kubernetes orchestration
+Styling constraints:
+
+Academic and publication-friendly.
+High contrast, minimal decoration, clean alignment.
+Avoid clutter; use grouped containers and short labels.
+Keep component names explicit and not generic.
+Make sure all three diagrams are consistent in naming and arrow semantics.

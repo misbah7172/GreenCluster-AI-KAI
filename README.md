@@ -39,7 +39,7 @@ KAI is a platform that enables running **large AI models on clusters of low-end 
 - **Active Inference (Non-DRL)** — Bayesian belief-based decision making that learns from environment observations and minimizes Expected Free Energy.
 - **Batch Processing** — Dynamic batching with multiple strategies (fixed-size, fixed-time, adaptive, continuous) for improved throughput.
 - **DFS Scheduler with Pruning** — Depth-first tree search with alpha-beta, branch-and-bound, and beam search pruning for task scheduling.
-- **ILP/Heuristic Scheduler** — Integer Linear Programming for small systems with genetic algorithm fallback for large-scale deployments.
+- **ILP/Heuristic Scheduler** — Production-grade mixed scheduler with dependency-aware assignment, anti-affinity, hard/soft affinity, weighted resource-plus-balance objectives, ILP warm start, infeasibility diagnostics, and hybrid ILP+heuristic solving for large deployments.
 - **PyTorch to ONNX Conversion** — Model export with optimization and quantization for cross-platform deployment simulation.
 - **Simulation Optimization** — Layer simplification, decode approximation, and caching tricks for faster simulation runs.
 
