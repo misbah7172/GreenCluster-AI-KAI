@@ -111,7 +111,7 @@ class TestDEASScheduler(unittest.TestCase):
         self.assertIsNotNone(NodeEnergyProfile)
         self.assertIsNotNone(MigrationState)
 
-    def _make_scheduler(self, cooldown_s=30.0):
+    def _make_scheduler(self, cooldown_s=30.0, **kwargs):
         bus = MagicMock()
         partitioner = MagicMock()
         from model.deas_scheduler import DEASScheduler
@@ -120,9 +120,20 @@ class TestDEASScheduler(unittest.TestCase):
             auto_partitioner=partitioner,
             controller=None,
             cooldown_s=cooldown_s,
+            **kwargs,
         )
 
-    def _profile(self, name, power, throughput, level, chunks=None, memory=4096.0):
+    def _profile(
+        self,
+        name,
+        power,
+        throughput,
+        level,
+        chunks=None,
+        memory=4096.0,
+        latency=0.0,
+        gpu_util=0.0,
+    ):
         from model.deas_scheduler import NodeEnergyProfile
         eer = throughput / power if power > 0 else 0.0
         return NodeEnergyProfile(
@@ -133,6 +144,8 @@ class TestDEASScheduler(unittest.TestCase):
             current_chunks=chunks if chunks is not None else [],
             threshold_level=level,
             usable_memory_mb=memory,
+            avg_latency_ms=latency,
+            gpu_utilization_pct=gpu_util,
         )
 
     def test_compute_cluster_eer_correct(self):
@@ -172,6 +185,27 @@ class TestDEASScheduler(unittest.TestCase):
         ]
         self.assertFalse(sched.should_rebalance(profiles))
 
+    def test_should_rebalance_predictive_warning_trend(self):
+        """Predictive rebalance triggers for rising power on warning node."""
+        sched = self._make_scheduler()
+
+        p1 = [
+            self._profile("warn", 170.0, 12.0, "warning", chunks=[0, 1], latency=110.0),
+            self._profile("cool", 85.0, 16.0, "optimal", chunks=[2], latency=60.0),
+        ]
+        p2 = [
+            self._profile("warn", 182.0, 11.7, "warning", chunks=[0, 1], latency=122.0),
+            self._profile("cool", 86.0, 16.2, "optimal", chunks=[2], latency=62.0),
+        ]
+        p3 = [
+            self._profile("warn", 195.0, 11.4, "warning", chunks=[0, 1], latency=136.0),
+            self._profile("cool", 86.5, 16.4, "optimal", chunks=[2], latency=63.0),
+        ]
+
+        self.assertFalse(sched.should_rebalance(p1))
+        self.assertFalse(sched.should_rebalance(p2))
+        self.assertTrue(sched.should_rebalance(p3))
+
     def test_cooldown_prevents_rapid_triggers(self):
         """After a rebalance, _on_critical_event is suppressed during cooldown."""
         sched = self._make_scheduler(cooldown_s=60.0)
@@ -202,6 +236,55 @@ class TestDEASScheduler(unittest.TestCase):
             self.assertEqual(plan.source_node, "crit-node")
             self.assertEqual(plan.target_node, "cool-node")
             self.assertEqual(plan.reason, "critical_threshold")
+
+    def test_plan_migration_limits_top_k(self):
+        """DEAS should support multi-chunk planning but cap plans per cycle."""
+        sched = self._make_scheduler(max_migrations_per_cycle=2, candidate_chunks_per_node=4)
+        profiles = [
+            self._profile("crit-node", 320.0, 5.2, "critical", chunks=[0, 1, 2, 3]),
+            self._profile("cool-a", 78.0, 16.0, "optimal", chunks=[4], memory=8192.0),
+            self._profile("cool-b", 82.0, 15.4, "optimal", chunks=[5], memory=8192.0),
+        ]
+        plans = sched.plan_migration(profiles)
+        self.assertLessEqual(len(plans), 2)
+        self.assertGreaterEqual(len(plans), 1)
+
+    def test_plan_migration_no_action_when_cost_exceeds_benefit(self):
+        """High migration cost should result in no migration plans."""
+        sched = self._make_scheduler(
+            network_bandwidth_mb_s=5.0,
+            checkpoint_speed_mb_s=20.0,
+            transfer_latency_ms=50.0,
+        )
+        profiles = [
+            self._profile("crit-node", 220.0, 8.0, "critical", chunks=[0]),
+            self._profile("cool-node", 170.0, 9.0, "optimal", memory=2048.0),
+        ]
+        plans = sched.plan_migration(profiles)
+        self.assertEqual(plans, [])
+
+    def test_adaptive_cooldown_increases_on_no_action(self):
+        """Cooldown should expand when repeated triggers find no beneficial plans."""
+        bus = MagicMock()
+        partitioner = MagicMock()
+        controller = MagicMock()
+        controller.trigger_rebalance.return_value = {
+            "rebalanced": False,
+            "migration_plans": [],
+            "reason": "no_beneficial_plan",
+        }
+
+        from model.deas_scheduler import DEASScheduler
+        sched = DEASScheduler(
+            event_bus=bus,
+            auto_partitioner=partitioner,
+            controller=controller,
+            cooldown_s=10.0,
+        )
+
+        baseline = sched.cooldown_s
+        sched._trigger_rebalance("unit_test")
+        self.assertGreater(sched.cooldown_s, baseline)
 
     def test_scheduler_signal_triggers_rebalance_via_controller(self):
         """Energy controller signal should trigger controller.trigger_rebalance."""

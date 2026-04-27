@@ -996,6 +996,8 @@ class KAIController:
                 "current_chunks": node_chunks.get(node, []),
                 "threshold_level": level,
                 "usable_memory_mb": m.get("usable_memory_mb", 0.0),
+                "avg_latency_ms": m.get("avg_latency_ms", 0.0),
+                "gpu_utilization_pct": m.get("gpu_utilization_pct", 0.0),
             })
 
         return profiles
@@ -1023,6 +1025,8 @@ class KAIController:
                 current_chunks=p["current_chunks"],
                 threshold_level=p["threshold_level"],
                 usable_memory_mb=p["usable_memory_mb"],
+                avg_latency_ms=float(p.get("avg_latency_ms", 0.0) or 0.0),
+                gpu_utilization_pct=float(p.get("gpu_utilization_pct", 0.0) or 0.0),
             )
             for p in raw_profiles
         ]
@@ -1044,18 +1048,36 @@ class KAIController:
             }
 
         plans = deas.plan_migration(profiles)
+        if not plans:
+            return {
+                "rebalanced": False,
+                "reason": "no_beneficial_plan",
+                "profiles": raw_profiles,
+                "migration_plans": [],
+            }
+
         results = []
-        for plan in plans:
-            ok = deas.execute_migration(plan)
-            results.append({
-                "chunk_id": plan.chunk_id,
-                "source": plan.source_node,
-                "target": plan.target_node,
-                "success": ok,
-            })
+        if hasattr(deas, "execute_migration_batch"):
+            batch_results = deas.execute_migration_batch(plans)
+            for plan, ok in zip(plans, batch_results):
+                results.append({
+                    "chunk_id": plan.chunk_id,
+                    "source": plan.source_node,
+                    "target": plan.target_node,
+                    "success": ok,
+                })
+        else:
+            for plan in plans:
+                ok = deas.execute_migration(plan)
+                results.append({
+                    "chunk_id": plan.chunk_id,
+                    "source": plan.source_node,
+                    "target": plan.target_node,
+                    "success": ok,
+                })
 
         return {
-            "rebalanced": True,
+            "rebalanced": any(item.get("success") for item in results),
             "profiles": raw_profiles,
             "migration_plans": results,
         }
