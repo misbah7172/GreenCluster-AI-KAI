@@ -37,9 +37,11 @@ KAI is a **distributed AI inference platform** that lets you run large language 
 - **Extends existing DEAS** — enhances the Dynamic Energy-Aware Scheduler with network awareness.
 
 ### Energy Feedback Control Loop
-- **PID-based optimization** — uses proportional-integral-derivative control to minimize energy per token.
-- **Dynamic adjustment** — automatically tunes batch size, GPU power limits, precision strategy, and offloading thresholds.
-- **Maintains quality** — optimizes for energy efficiency without degrading output accuracy.
+- **Hybrid control strategy** — combines PID feedback with short-horizon prediction to proactively prevent power and latency violations.
+- **Risk-aware decisioning** — scores actions by expected benefit, operational cost, and risk, then selects the safest high-value action.
+- **Adaptive adjustment** — tunes batch size, GPU power limits, precision strategy, and offloading thresholds with stability-aware escalation.
+- **Safety guardrails** — enforces latency/throughput/memory constraints, applies cooldown and rollback behavior, and avoids repeating harmful actions.
+- **Scheduler integration** — emits overloaded-worker and inefficient-node signals for upstream rebalancing logic.
 - **CLI**: `python kai_cli.py energy-loop --power-target 100 --latency-target 50 --daemon`
 
 ### Speculative Decoding
@@ -278,7 +280,7 @@ This means a LLaMA 7B model (~14 GB in fp16) can be reduced to ~3.5 GB in 4-bit 
 | `kai_cli.py speculative` | Run with speculative decoding (faster inference) |
 | `kai_cli.py hybrid` | Run with hybrid parallelism (tensor + pipeline) |
 | `kai_cli.py placement` | Generate intelligent placement plan |
-| `kai_cli.py energy-loop` | Start energy feedback control loop |
+| `kai_cli.py energy-loop` | Start adaptive predictive energy control loop with safety guardrails |
 | `kai_cli.py fault-tolerant` | Run with fault-tolerant pipeline |
 | `kai_cli.py plugins` | List and manage plugins |
 

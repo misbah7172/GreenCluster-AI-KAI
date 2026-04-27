@@ -24,7 +24,7 @@ KAI is a platform that enables running **large AI models on clusters of low-end 
 - **Intelligent Model Placement** — Multi-objective optimization for layer-to-node mapping considering GPU VRAM, CPU RAM, network latency, and energy efficiency (EER).
 - **KV Cache Optimization** — Mixed-precision KV cache (FP16 for recent tokens, INT8 for older tokens), cache reuse across requests with overlapping prompts, memory-aware eviction.
 - **Network-Aware Scheduling** — Enhanced DEAS with inter-node latency and bandwidth tracking. Groups dependent layers to minimize network transfers.
-- **Energy Feedback Control Loop** — PID-based closed-loop optimizer that dynamically adjusts batch size, GPU power limits, precision, and offloading thresholds to minimize energy per token.
+- **Energy Feedback Control Loop** — Adaptive closed-loop optimizer combining PID feedback, short-horizon prediction, action benefit-cost-risk scoring, adaptive sampling, and safety guardrails to tune batch size, GPU power limits, precision, and offloading with stable energy-performance trade-offs.
 - **Speculative Decoding** — Uses a smaller draft model to generate candidate tokens, verified by the main model. Reduces latency with mathematically identical output.
 - **Fault-Tolerant Pipeline** — Automatic failure detection, checkpoint-based recovery, and layer reassignment to healthy nodes without output corruption.
 - **Adaptive Precision Controller** — Dynamic precision (FP16/INT8/INT4) based on layer criticality and memory/power pressure. No perceptible accuracy degradation.
@@ -343,7 +343,7 @@ KAI/
 │   ├── intelligent_placement.py  #   Multi-objective placement optimization
 │   ├── network_aware_scheduler.py #  Enhanced DEAS with network awareness
 │   ├── hybrid_parallelism.py     #   Pipeline + tensor parallelism engine
-│   ├── energy_feedback_loop.py   #   PID-based energy optimization
+│   ├── energy_feedback_loop.py   #   Adaptive predictive energy optimization (PID + scoring + guardrails)
 │   ├── speculative_decoder.py    #   Draft model speculation with verification
 │   ├── fault_tolerant_pipeline.py #  Failure detection and recovery
 │   └── auto_tuner.py             #   Auto-tuning benchmark system
@@ -1128,6 +1128,12 @@ Options:
   --latency-target  Target latency (ms)              (default: 100.0)
   --interval        Control loop interval (s)        (default: 1.0)
   --daemon          Run continuously
+
+Behavior:
+- Uses hybrid control (reactive PID + predictive trend estimation)
+- Scores candidate actions using benefit - cost - risk
+- Applies low-risk to high-risk actions gradually with safety rollback guards
+- Emits overload/inefficiency signals for scheduler-level rebalancing
 ```
 
 #### `fault-tolerant` — Fault-Tolerant Pipeline
