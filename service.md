@@ -6,6 +6,93 @@ KAI is a **distributed AI inference platform** that lets you run large language 
 
 ---
 
+## Subsystem-to-Role Map (Quick)
+
+Use this format: `role (module)`.
+
+### Core Inference Pipeline
+
+- **conductor** (`kai_cli.py`) - Main command router for run, benchmark, deploy, tune, and analysis flows.
+- **launcher** (`kai_cli_dashboard.py`) - Starts the recommended dashboard runtime profile.
+- **loader** (`model/hf_loader.py`) - Reads HuggingFace model structure and metadata.
+- **scanner** (`model/resource_detector.py`) - Detects GPU VRAM, RAM, CPU, and node capabilities.
+- **splitter** (`model/chunker.py`) - Splits baseline models into sequential chunk modules.
+- **layer-splitter** (`model/layer_chunker.py`) - Splits transformer blocks layer-wise for distributed serving.
+- **assigner** (`model/auto_partitioner.py`) - Maps layers/chunks to nodes based on capacity.
+- **server** (`model/chunk_server.py`) - gRPC chunk worker that executes assigned layers.
+- **router** (`model/gateway.py`) - HTTP/gRPC gateway that chains chunk services and routes requests.
+- **generator** (`model/generation.py`) - Autoregressive decoding pipeline across distributed chunks.
+- **weights-reader** (`model/weight_utils.py`) - Loads partial checkpoint weights for chunk-specific execution.
+- **quantizer** (`model/quantizer.py`) - Applies 4-bit/8-bit quantization paths.
+- **model-core** (`model/transformer.py`, `model/cnn.py`) - Built-in reference model definitions.
+
+### Scheduling, Control, and Optimization
+
+- **planner** (`model/ilp_scheduler.py`) - ILP and hybrid assignment optimization engine.
+- **tuner** (`model/energy_feedback_loop.py`) - Closed-loop energy-performance controller.
+- **fixer** (`model/deas_scheduler.py`) - Predictive, cost-aware rebalance and migration planner.
+- **network-fixer** (`model/network_aware_scheduler.py`) - DEAS extension that includes network penalties.
+- **placer** (`model/intelligent_placement.py`) - Multi-objective placement optimizer.
+- **parallelizer** (`model/hybrid_parallelism.py`) - Pipeline plus tensor parallel strategy manager.
+- **accelerator** (`model/speculative_decoder.py`) - Draft-and-verify speculative decoding engine.
+- **healer** (`model/fault_tolerant_pipeline.py`) - Failure detection, checkpoint recovery, and reassignment.
+- **precision-tuner** (`model/adaptive_precision.py`) - Dynamic FP16/INT8/INT4 precision control.
+- **cache-manager** (`model/kv_cache_optimizer.py`) - KV cache reuse, compression, and eviction policies.
+- **tier-manager** (`model/tiered_weight_manager.py`) - GPU/RAM/disk weight placement manager.
+- **prefetcher** (`model/prefetch_engine.py`) - Async prefetch to hide offload transfer latency.
+- **auto-tuner** (`model/auto_tuner.py`) - Searches configs for best objective (energy/latency/throughput).
+- **plugin-hub** (`model/plugin_architecture.py`) - Strategy registry and extension interface.
+- **latency-prober** (`model/latency_probe.py`) - Real endpoint RTT probing with cache.
+
+### Advanced Algorithm Modules (Phase 25)
+
+- **fairness-selector** (`model/fcim_worker_selector.py`) - Cost-performance-fairness worker selection.
+- **task-reorderer** (`model/adsa_scheduler.py`) - Adaptive task scheduling with aging and policy switching.
+- **belief-controller** (`model/active_inference.py`) - Bayesian decision control without DRL.
+- **batch-scheduler** (`model/batch_processor.py`) - Dynamic/continuous batching control.
+- **search-scheduler** (`model/dfs_scheduler.py`) - DFS-based scheduling with pruning strategies.
+- **exporter** (`model/onnx_converter.py`) - PyTorch-to-ONNX conversion and optimization.
+- **sim-optimizer** (`model/simulation_optimizer.py`) - Fast simulation with approximation controls.
+
+### Monitoring and Telemetry
+
+- **gpu-sampler** (`monitoring/gpu_monitor.py`) - NVML GPU power/util/temp/memory sampling.
+- **cpu-sampler** (`monitoring/cpu_monitor.py`) - CPU usage sampling.
+- **metrics-aggregator** (`monitoring/metrics.py`) - Unified energy, latency, throughput, and EER metrics.
+- **threshold-evaluator** (`monitoring/threshold_service.py`) - TDP-based OPTIMAL/WARNING/CRITICAL detection.
+- **event-bus** (`monitoring/event_bus.py`) - Async pub/sub for threshold and control signals.
+- **monitor-api** (`monitoring/monitor_service.py`) - HTTP service exposing monitor and threshold endpoints.
+- **telemetry-recorder** (`monitoring/telemetry.py`) - Routing/inference telemetry persistence and export.
+
+### Kubernetes and Runtime Infrastructure
+
+- **orchestrator** (`kubernetes/controller.py`) - Deploys services, gathers profiles, and triggers rebalance.
+- **deploy-specs** (`kubernetes/deployments/`) - Deployment manifests for chunk/gateway/monitor services.
+- **service-specs** (`kubernetes/services/`) - Kubernetes service manifests for traffic routing.
+- **quota-guard** (`kubernetes/gpu-resource-quota.yaml`) - Namespace GPU quota policy.
+- **image-chunk** (`docker/Dockerfile.chunk`) - Container build recipe for chunk workers.
+- **image-gateway** (`docker/Dockerfile.gateway`) - Container build recipe for gateway.
+- **image-monitor** (`docker/Dockerfile.monitor`) - Container build recipe for monitor daemon.
+- **local-stack** (`docker/docker-compose.yml`) - Local multi-service compose profile.
+
+### Experiments, Analysis, and Dashboard
+
+- **experiment-conductor** (`experiments/experiment_runner.py`) - Runs local, k8s, or both benchmark modes.
+- **local-runner** (`experiments/local_runner.py`) - Single-node benchmark execution.
+- **cluster-runner** (`experiments/k8s_runner.py`) - Kubernetes benchmark execution.
+- **analyzer** (`analysis/analyzer.py`) - Computes summary metrics and comparisons.
+- **plotter** (`analysis/plots.py`) - Generates publication-style figures.
+- **main-dashboard** (`dashboard/unified_app.py`, `dashboard/comprehensive_dashboard.py`) - Unified operational UI.
+- **legacy-dashboard** (`dashboard/app.py`) - Older analysis dashboard path.
+- **telemetry-dashboard** (`dashboard/telemetry_dashboard.py`) - Live telemetry-focused dashboard.
+
+### API Contract Layer
+
+- **contract** (`proto/inference.proto`) - gRPC service definition for infer/health/migration RPCs.
+- **python-stubs** (`proto/inference_pb2.py`, `proto/inference_pb2_grpc.py`) - Generated protocol bindings.
+
+---
+
 ## Distributed LLM Inference
 
 - **Run models too large for one machine** — splits HuggingFace models (GPT-2, LLaMA, Mistral, Phi-2, Falcon, Qwen, etc.) layer-by-layer across multiple nodes. Each node loads only its assigned layers.
