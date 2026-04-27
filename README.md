@@ -12,7 +12,7 @@ KAI is a platform that enables running **large AI models on clusters of low-end 
 - **Text Generation** — Full autoregressive generation pipeline with temperature, top-k, top-p sampling, and streaming output.
 - **Energy Benchmarking** — Measures GPU power draw, CPU usage, and inference latency to compare local vs. Kubernetes deployment costs.
 - **Real-Time Energy Instrumentation** — Sub-100ms GPU sampling, ring buffers, TDP auto-detection, trapezoidal energy integration, and power threshold alerts via an async event bus.
-- **Dynamic Energy-Aware Scheduling (DEAS)** — Automatically migrates chunks away from overheating nodes using a 5-step Pause/Checkpoint/Migrate/Relink/Resume workflow with configurable cooldown.
+- **Dynamic Energy-Aware Scheduling (DEAS)** — Predictive and cost-aware scheduler that triggers on CRITICAL events and degradation trends, scores migrations by EER benefit minus cost/latency penalties, supports top-k multi-chunk plans, adaptive cooldown, and 5-step Pause/Checkpoint/Migrate/Relink/Resume execution.
 - **CPU/Disk Offloading** — FlexGen-style tiered weight management (GPU VRAM → System RAM → Disk) with double-buffered prefetching to hide transfer latency.
 - **Single-Command CLI** — `python kai_cli.py run --model <name> --prompt "Hello" --max-tokens 100`
 - **Quantization** — Optional 4-bit (NF4) and 8-bit (INT8) quantization via bitsandbytes to reduce memory per chunk.
@@ -24,7 +24,7 @@ KAI is a platform that enables running **large AI models on clusters of low-end 
 - **Intelligent Model Placement** — Multi-objective optimization for layer-to-node mapping considering GPU VRAM, CPU RAM, network latency, and energy efficiency (EER).
 - **KV Cache Optimization** — Mixed-precision KV cache (FP16 for recent tokens, INT8 for older tokens), cache reuse across requests with overlapping prompts, memory-aware eviction.
 - **Network-Aware Scheduling** — Enhanced DEAS with inter-node latency and bandwidth tracking. Groups dependent layers to minimize network transfers.
-- **Energy Feedback Control Loop** — Adaptive closed-loop optimizer combining PID feedback, short-horizon prediction, action benefit-cost-risk scoring, adaptive sampling, and safety guardrails to tune batch size, GPU power limits, precision, and offloading with stable energy-performance trade-offs.
+- **Energy Feedback Control Loop** — Adaptive closed-loop optimizer combining PID feedback, short-horizon prediction, action benefit-cost-risk scoring, adaptive sampling, and safety guardrails to tune batch size, GPU power limits, precision, and offloading with stable energy-performance trade-offs, while emitting scheduler signals for predictive DEAS rebalancing.
 - **Speculative Decoding** — Uses a smaller draft model to generate candidate tokens, verified by the main model. Reduces latency with mathematically identical output.
 - **Fault-Tolerant Pipeline** — Automatic failure detection, checkpoint-based recovery, and layer reassignment to healthy nodes without output corruption.
 - **Adaptive Precision Controller** — Dynamic precision (FP16/INT8/INT4) based on layer criticality and memory/power pressure. No perceptible accuracy degradation.
@@ -1401,13 +1401,15 @@ This project is for academic and research purposes.
 
 ---
 
-## Implementation Status - 2026-04-11
+## Implementation Status - 2026-04-27
 
 ### What Is Now Implemented
 - The production dashboard in dashboard/comprehensive_dashboard.py is the primary UX for running and validating KAI behavior.
 - Live Inference uses asynchronous execution with responsive stop controls and per-run history.
 - KV telemetry is wired to measured runtime counters instead of placeholders.
 - Live GPU telemetry is active with NVML-first sampling and nvidia-smi fallback.
+- DEAS is upgraded to predictive and cost-aware planning with top-k migration selection, adaptive cooldown tuning, history-informed scoring, and optional localized ILP refinement.
+- Kubernetes rebalance flow now supports explicit no-beneficial-plan outcomes and bounded batch migration execution.
 
 ### Recommended Runtime
 - Use .venv310 for CUDA-enabled execution.
@@ -1426,4 +1428,4 @@ python kai_cli_dashboard.py dashboard-pro
 ```
 
 ### Reader Note
-- This README reflects the currently implemented dashboard, telemetry, and KV analytics behavior as of 2026-04-11.
+- This README reflects the currently implemented dashboard, telemetry, and scheduler behavior as of 2026-04-27.

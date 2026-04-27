@@ -41,7 +41,7 @@ KAI is a **distributed AI inference platform** that lets you run large language 
 - **Risk-aware decisioning** — scores actions by expected benefit, operational cost, and risk, then selects the safest high-value action.
 - **Adaptive adjustment** — tunes batch size, GPU power limits, precision strategy, and offloading thresholds with stability-aware escalation.
 - **Safety guardrails** — enforces latency/throughput/memory constraints, applies cooldown and rollback behavior, and avoids repeating harmful actions.
-- **Scheduler integration** — emits overloaded-worker and inefficient-node signals for upstream rebalancing logic.
+- **Scheduler integration** — emits overloaded-worker and inefficient-node signals for predictive DEAS rebalancing.
 - **CLI**: `python kai_cli.py energy-loop --power-target 100 --latency-target 50 --daemon`
 
 ### Speculative Decoding
@@ -199,9 +199,15 @@ KAI's built-in energy benchmarking proves this. Run `python kai_cli.py benchmark
 ## Dynamic Energy-Aware Scheduling — DEAS (Phase 21)
 
 - **Energy-Efficiency Ratio (EER)** — `throughput / avg_power` metric computed per node and cluster-wide.
+- **Reactive + predictive triggering** — rebalances on CRITICAL events, warning-level degradation trends, and scheduler signals from the energy feedback loop.
+- **Cost-aware migration scoring** — ranks candidates using expected EER gain minus migration cost and latency penalty.
+- **Top-k multi-chunk planning** — evaluates multiple chunks and targets per cycle, selects best migrations, and supports explicit no-action decisions when no beneficial move exists.
+- **Optional localized ILP refinement** — uses a small binary optimization pass for candidate selection, with greedy fallback when ILP is unavailable or unnecessary.
+- **Adaptive cooldown control** — dynamically tightens or relaxes cooldown based on migration success, failure, or no-action outcomes.
+- **History-informed decisions** — incorporates migration success/downtime history to prefer safer, higher-yield move patterns over time.
+- **Batch migration execution** — supports executing a bounded set of migrations in one rebalance cycle.
 - **Live chunk migration** — Pause/Checkpoint/Resume gRPC RPCs allow moving model chunks between nodes without restarting the pipeline.
 - **Gateway relinking** — thread-safe hot-swapping of chunk endpoints during migration (`POST /relink`).
-- **DEAS scheduler** — subscribes to CRITICAL power events and orchestrates 5-step migrations (Pause → Checkpoint → Migrate → Relink → Resume) with configurable cooldown.
 - **Topology inspection** — `GET /topology` returns the current chunk-to-host mapping.
 
 ---
@@ -445,21 +451,23 @@ KAI's quantization is simpler (NF4 or INT8 only), but it combines with distribut
 
 ---
 
-## Implementation Status - 2026-04-11
+## Implementation Status - 2026-04-27
 
 ### Service-Level State
 - Core dashboard-driven operations are implemented and stable for interactive inference and telemetry visibility.
 - Runtime service behavior now includes asynchronous generation control and session-based run tracking.
 - KV cache reporting is based on observed counters and runtime mode, including fallback awareness.
+- DEAS runtime now includes predictive and cost-aware scheduling with top-k migration planning, adaptive cooldown tuning, and optional localized ILP candidate refinement.
 
 ### Operational Highlights
 - GPU telemetry stream includes utilization, VRAM, temperature, power, and rolling energy estimation.
 - Routing/performance views reflect live measured values rather than static summaries.
 - Export controls are available for telemetry and KV diagnostics workflows.
+- Controller-to-scheduler integration supports explicit no-beneficial-plan outcomes and bounded batch migration execution.
 
 ### Environment Guidance
 - For service-level efficiency validation, use the CUDA-capable .venv310 runtime.
 - CPU-only .venv remains suitable for basic non-GPU checks.
 
 ### Reader Note
-- This service overview is synchronized with current implementation behavior as of 2026-04-11.
+- This service overview is synchronized with current implementation behavior as of 2026-04-27.
